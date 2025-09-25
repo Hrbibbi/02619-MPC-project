@@ -30,8 +30,8 @@ d_c = np.zeros((2, nt))
 d_c[:, :] = 5  # simple step disturbance
 
 # We need to generate nt random points centered around some value?
-Q = np.array([[2,1],[1,10]])
-d_p = np.random.multivariate_normal(np.array([0,0]),Q,nt).T
+Q_p = np.array([[2,1],[1,10]])
+d_p = np.random.multivariate_normal(np.array([0,0]),Q_p,nt).T
 
 # noise covariances (as in your SDE/S models)
 Q   = np.diag([50.0**2, 30.0**2])      # SDE diffusion (tanks 3–4)
@@ -40,9 +40,22 @@ Rvv = np.diag([1.0, 1.0, 0.0, 0.0])    # measurement noise on h1, h2
 
 #Poisson process
 exp_times = []
+noise_all = []
 t_dummy = t0
-#while t_dummy <= te:
-#    pass
+l = dt
+while t_dummy <= te:
+    escape_time = np.random.exponential(l)
+    exp_times.append(escape_time)
+    t_dummy += escape_time
+
+total_times = np.cumsum(exp_times)
+d_pois = np.random.multivariate_normal(np.array([0,0]),Q,len(total_times)).T
+
+
+    
+    
+    
+    
     
 
 

@@ -29,7 +29,7 @@ class four_tank_SDE:
         self.hbar = hbar
         self.t0 = 0
         self.Rvv = Rvv
-        self.rng = np.random.default_rng()       # for reproducibility you can pass a seed
+        self.rng = np.random.default_rng()     
     def flows(self, h):
         #Return outflows qi
         h = np.maximum(h, 0.0)
