@@ -22,6 +22,12 @@ KP = np.zeros((2, n)); KP[0,0]=2.0; KP[1,1]=2.0
 KI = np.zeros((2, n)); KI[0,0]=0.05; KI[1,1]=0.05
 KD = np.zeros((2, n)); KD[0,0]=1.0;  KD[1,1]=1.0
 
+ubar_segments = [
+    (0, [100.0, 300.0]),
+    (400.0, [400.0, 600.0]),
+    (800.0, [250.0, 400.0]),
+]
+
 ### Disturbance and measurements
 d_determ = np.full((2,), 100)
 sig_v = 1.0

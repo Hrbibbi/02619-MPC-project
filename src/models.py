@@ -8,8 +8,15 @@ class FourTank:
     """Class modelling the modified four tank system"""
     def __init__(self, dt, hbar, ubar):
         self.hbar = hbar.copy()
-        self.ubar = ubar.copy()
-        self.u = ubar.copy()
+
+        if isinstance(ubar, list) and isinstance(ubar[0], tuple):
+            # looks like [(t0, u0), (t1, u1), ...]
+            self.ubar_type = 'piecewise'
+            self.set_ubar_piecewise(ubar)
+        else:
+            self.ubar_type = 'constant'
+            self.ubar = np.asarray(ubar, float).copy()
+        
         self.n = 4
         self.dt = dt
 
@@ -74,7 +81,7 @@ class FourTank:
         m = np.asarray(m0, dtype=float).copy()
         m_prev = m.copy()
 
-        u0 = np.atleast_1d(self.u).astype(float)
+        u0 = np.atleast_1d(self.get_ubar(t0)).astype(float)
         nx, nu = m.size, u0.size
 
         self.hist['t'] = np.empty(N + 1, dtype=float)
@@ -103,7 +110,8 @@ class FourTank:
             y = h + v
             self.hist['y'][k] = FourTank.mass_to_height(m) + v
 
-            self.controller(y, y_prev, dt, ctrl_type)
+            ubar = self.get_ubar(t)
+            self.controller(ubar, y, y_prev, dt, ctrl_type)
             
             d = self.get_disturbance(t)
             t_next = t + dt
@@ -128,13 +136,13 @@ class FourTank:
         self.hist['td'] = td_hist
         self.hist['d'] = d_hist
     
-    def controller(self, y, y_prev, dt, ctrl_type):
-        # PID controller
+    def controller(self, ubar, y, y_prev, dt, ctrl_type):
+        # PID controller (4 variable input, 2 variable output)
         if not ctrl_type in ["", "P", "PI", "PID"]:
             raise ValueError("No valid control type chosen")
         
         e = self.hbar - y
-        u_cand = self.ubar.copy()
+        u_cand = ubar.copy()
         if "P" in ctrl_type:
             P = self.KP @ e
             u_cand += P
@@ -148,7 +156,23 @@ class FourTank:
         self.u = np.clip(u_cand, p.umin, p.umax)
 
         if "I" in ctrl_type:
-            self.I += (self.KI @ e) * free * dt 
+            self.I += (self.KI @ e) * free * dt
+    
+    def set_ubar_piecewise(self, segments):
+        self.ubar_piecewise = True
+        self.ubar_times = [t for (t, _) in segments]
+        self.ubar_vals = [np.asarray(u, float) for (_, u) in segments]
+        self.ubar_idx = 0 # index of segment
+    
+    def get_ubar(self, t):
+        if self.ubar_type == 'constant':
+            return self.ubar
+        elif self.ubar_type == 'piecewise':
+            while self.ubar_idx + 1 < len(self.ubar_times) and t >= self.ubar_times[self.ubar_idx+1]:
+                self.ubar_idx += 1
+            return self.ubar_vals[self.ubar_idx]
+        else:
+            raise ValueError('Unknown ubar_type')
         
 
 class Deterministic(FourTank):
