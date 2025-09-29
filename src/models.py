@@ -79,6 +79,7 @@ class FourTank:
 
         self.hist['t'] = np.empty(N + 1, dtype=float)
         self.hist['m'] = np.empty((N + 1, nx), dtype=float)
+        self.hist['y'] = np.empty((N + 1, nx), dtype=float) # y is h + noise
         self.hist['u'] = np.empty((N + 1, nu), dtype=float)
 
         self.hist['t'][0] = t
@@ -86,12 +87,23 @@ class FourTank:
         self.hist['u'][0] = u0
         
         k = 0
-        v = self.get_measurement_noise(t)
+        v = None
         while (k < N) and (t < tf):
             dt = min(self.dt, tf - t)
+
             v_prev = v
             v = self.get_measurement_noise(t)
-            self.controller(m, m_prev, v, v_prev, dt, ctrl_type)
+            if k == 0:
+                v_prev = v
+
+            h_prev = FourTank.mass_to_height(m_prev)
+            h = FourTank.mass_to_height(m)
+
+            y_prev = h_prev + v_prev
+            y = h + v
+            self.hist['y'][k] = FourTank.mass_to_height(m) + v
+
+            self.controller(y, y_prev, dt, ctrl_type)
             
             d = self.get_disturbance(t)
             t_next = t + dt
@@ -110,18 +122,17 @@ class FourTank:
             self.hist['m'][k] = m
             self.hist['u'][k] = np.atleast_1d(self.u).astype(float)
         
+        self.hist['h'] = FourTank.mass_to_height(self.hist['m'])
+        self.hist['y'][-1] = self.hist['h'][-1] + self.get_measurement_noise(tf)
         td_hist, d_hist = self.get_disturbance_hist()
         self.hist['td'] = td_hist
         self.hist['d'] = d_hist
-        self.hist['h'] = FourTank.mass_to_height(self.hist['m'])
     
-    def controller(self, m, m_prev, v, v_prev, dt, ctrl_type):
+    def controller(self, y, y_prev, dt, ctrl_type):
         # PID controller
         if not ctrl_type in ["", "P", "PI", "PID"]:
             raise ValueError("No valid control type chosen")
         
-        y = FourTank.mass_to_height(m) + v
-        y_prev = FourTank.mass_to_height(m_prev) + v_prev
         e = self.hbar - y
         u_cand = self.ubar.copy()
         if "P" in ctrl_type:

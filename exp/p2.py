@@ -13,6 +13,6 @@ stoch_piece.simulate(p.t0, p.tf, p.m0, ctrl_type="")
 # T_SDE, M_SDE, U_SDE = run_piecewise_open_loop(stoch_brown, segments, p.m0, p.dt)
 
 
-plot_hist(determ.hist, "Open-loop - Deterministic")
-plot_hist(stoch_piece.hist, "Open-loop - Stochastic piecewise")
+plot_hist(determ, "Open-loop - Deterministic")
+plot_hist(stoch_piece, "Open-loop - Stochastic piecewise")
 # step_plot_inputs_outputs(T_SDE, U_SDE, H_SDE, "Open-loop - SDE")

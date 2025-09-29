@@ -5,7 +5,9 @@ import matplotlib.pyplot as plt
 import src.constants as c
 import src.parameters as p
 
-def plot_hist(hist, title):
+def plot_hist(model, title):
+    hist = model.hist
+    hbar = model.hbar
     fig, ax = plt.subplots(3, 1, figsize=(9, 9), sharex=True)
 
     ax[0].step(hist['t'], hist['u'][:,0], where="post", label="u1")
@@ -15,8 +17,12 @@ def plot_hist(hist, title):
     ax[0].legend()
     ax[0].grid(True, alpha=0.3)
 
-    ax[1].plot(hist['t'], hist['h'][:,0], label="h1")
-    ax[1].plot(hist['t'], hist['h'][:,1], label="h2")
+    ax[1].plot(hist['t'], hist['y'][:, 0], ".", color="lightskyblue", alpha=0.5, label="y1")
+    ax[1].plot(hist['t'], hist['y'][:, 1], ".", color="moccasin", alpha=0.5, label="y2")
+    line1, = ax[1].plot(hist['t'], hist['h'][:,0], label="h1", lw=2)
+    line2, = ax[1].plot(hist['t'], hist['h'][:,1], label="h2", lw=2)
+    ax[1].axhline(hbar[0], ls='--', color=line1.get_color())
+    ax[1].axhline(hbar[1], ls='--', color=line2.get_color())
     ax[1].set_xlabel("time [s]")
     ax[1].set_ylabel("Heights")
     ax[1].legend()
