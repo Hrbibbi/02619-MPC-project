@@ -6,7 +6,7 @@ import src.parameters as p
 
 class FourTank:
     """Class modelling the modified four tank system"""
-    def __init__(self, dt, hbar, ubar):
+    def __init__(self, dt, hbar, ubar, seed=0):
         self.hbar = hbar.copy()
 
         if isinstance(ubar, list) and isinstance(ubar[0], tuple):
@@ -25,6 +25,8 @@ class FourTank:
         self.KI = p.KI.copy()
         self.KD = p.KD.copy()
         self.hist = {}
+
+        self.rng = np.random.default_rng(seed)
 
     @staticmethod
     def mass_to_height(m):
@@ -67,6 +69,15 @@ class FourTank:
     
     def get_measurement_noise(self, t):
         raise NotImplementedError
+
+    def solve_step(self, t, m, d, dt):
+        sol = sp.integrate.solve_ivp(
+            self.get_rhs, (t, t + dt), m, t_eval=[t + dt],
+            args=(d,), rtol=1e-6, atol=1e-8
+        )
+        if not sol.success:
+            raise RuntimeError(f"ODE solver failed: {sol.message}")
+        return sol.y[:, -1]
     
     def simulate(self, t0, tf, m0, ctrl_type="PID"):
         """
@@ -114,16 +125,10 @@ class FourTank:
             self.controller(ubar, y, y_prev, dt, ctrl_type)
             
             d = self.get_disturbance(t)
-            t_next = t + dt
-            sol = sp.integrate.solve_ivp(
-                self.get_rhs, (t, t_next), m, t_eval=[t_next],
-                args=(d,), rtol=1e-6,atol=1e-8
-            )
-            if not sol.success:
-                raise RuntimeError(f"ODE solver failed at step {k}: {sol.message}")
+            
             m_prev = m
-            m = sol.y[:,-1]
-            t = sol.t[-1]
+            m = self.solve_step(t, m, d, dt)
+            t = t + dt
 
             k += 1
             self.hist['t'][k] = t
@@ -193,7 +198,6 @@ class Deterministic(FourTank):
         # No noise in deterministic
         return np.zeros((4,))
 
-
 class StochasticPiecewise(FourTank):
     def __init__(self, dt, hbar, ubar, sig_v, mu_d, sig_d, t_d, seed=0):
         """
@@ -202,8 +206,7 @@ class StochasticPiecewise(FourTank):
         sig_d (length 2): std. dev. for disturbances
         t_d (scalar): mean time between disturbances
         """
-        super().__init__(dt, hbar, ubar)
-        self.rng = np.random.default_rng(seed)
+        super().__init__(dt, hbar, ubar, seed)
 
         self.sig_v = sig_v
         self.mu_d = mu_d
@@ -230,4 +233,29 @@ class StochasticPiecewise(FourTank):
         return self.rng.normal(scale=self.sig_v, size=self.n)
 
 class StochasticBrownian(FourTank):
-    pass
+    def __init__(self, dt, hbar, ubar, sig_v, sig_sde, seed=0):
+        super().__init__(dt, hbar, ubar, seed)
+        self.sig_v = sig_v
+        self.sig_sde = sig_sde
+    
+    def get_disturbance(self, t):
+        # This eliminates d in the RHS and extracts f
+        return np.zeros(2)
+    
+    def get_disturbance_hist(self):
+        return None, None
+
+    def get_measurement_noise(self, t):
+        return self.rng.normal(scale=self.sig_v, size=self.n)
+    
+    def get_sde_sigma(self):
+        # TODO: implement this using potentials instead of constant
+        sigma = np.array([0,0,self.sig_sde, self.sig_sde])
+        return sigma
+
+    def solve_step(self, t, m, d, dt):
+        f = self.get_rhs(t, m, d)
+        dW = np.sqrt(dt) * self.rng.normal(size=self.n)
+        g = self.get_sde_sigma()
+        sol = m + f * dt + g * dW
+        return sol

@@ -11,7 +11,6 @@ tf = 20.0 * 60.0
 nt = int((tf - t0)/dt) + 1
 
 # Controller parameters
-ctrl_type = "PID"
 ubar = np.array([300.0, 300.0])
 hbar = np.array([15.0, 25.0, 15.0,20.0])
 
@@ -30,7 +29,11 @@ ubar_segments = [
 
 ### Disturbance and measurements
 d_determ = np.full((2,), 100)
+
 sig_v = 1.0
+
 mu_d = np.array([100.0, 100.0])
-sig_d = np.array([20.0, 20.0])
+sig_d = np.array([50.0, 50.0])
 t_d = 10
+
+sig_sde = 50.0

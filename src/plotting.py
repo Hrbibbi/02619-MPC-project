@@ -6,7 +6,7 @@ from pathlib import Path
 import src.constants as c
 import src.parameters as p
 
-FIGDIR = Path('./fig')
+FIGDIR = Path('./figs')
 
 plt.rcParams.update({
     "text.usetex": True,
@@ -14,10 +14,12 @@ plt.rcParams.update({
     'font.size': 14,
 })
 
-def plot_hist(model, title, filename=None):
+def plot_hist(model, title, plot_disturbance=True, filename=None):
     hist = model.hist
     hbar = model.hbar
-    fig, ax = plt.subplots(3, 1, figsize=(9, 9), sharex=True)
+
+    nrows = 3 if plot_disturbance else 2
+    fig, ax = plt.subplots(nrows, 1, figsize=(9, 3*nrows), sharex=True)
 
     t0 = hist['t'][0]
     tf = hist['t'][-1]
@@ -34,19 +36,20 @@ def plot_hist(model, title, filename=None):
     ax[1].axhline(hbar[1], ls='--', color=line2.get_color(), label=r'$\overline{h}_2$')
     ax[1].set_ylabel("Heights")
 
-    ax[2].step(hist['td'], hist['d'][:,0], where='post', label=r'$d_1$')
-    ax[2].step(hist['td'], hist['d'][:,1], where='post', label=r'$d_2$')
-    ax[2].set_ylabel("Disturbances")
+    if plot_disturbance:
+        ax[2].step(hist['td'], hist['d'][:,0], where='post', label=r'$d_1$')
+        ax[2].step(hist['td'], hist['d'][:,1], where='post', label=r'$d_2$')
+        ax[2].set_ylabel("Disturbances")
     
     ax[-1].set_xlabel("time [s]")
     ax[-1].set_xlim(t0, tf)
-    for i in range(3):
+    for i in range(nrows):
         ax[i].legend(loc="upper right", bbox_to_anchor=(1.15, 1.0))
         ax[i].grid(True, alpha=0.3)
 
     fig.suptitle(title)
     plt.tight_layout()
     if filename is not None:
-        filepath = FIGDIR + filename
+        filepath = FIGDIR / Path(filename)
         plt.savefig(filepath.with_suffix('.pdf'), format='pdf')
     plt.show()
