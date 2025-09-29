@@ -16,7 +16,7 @@ plt.rcParams.update({
 
 def plot_hist(model, title, plot_disturbance=True, filename=None):
     hist = model.hist
-    hbar = model.hbar
+    zbar = model.zbar
 
     nrows = 3 if plot_disturbance else 2
     fig, ax = plt.subplots(nrows, 1, figsize=(9, 3*nrows), sharex=True)
@@ -32,8 +32,8 @@ def plot_hist(model, title, plot_disturbance=True, filename=None):
     ax[1].plot(hist['t'], hist['y'][:, 1], ".", color="moccasin", alpha=0.5, label=r'$y_2$')
     line1, = ax[1].plot(hist['t'], hist['h'][:,0], label=r'$h_1$', lw=2)
     line2, = ax[1].plot(hist['t'], hist['h'][:,1], label=r'$h_2$', lw=2)
-    ax[1].axhline(hbar[0], ls='--', color=line1.get_color(), label=r'$\overline{h}_1$')
-    ax[1].axhline(hbar[1], ls='--', color=line2.get_color(), label=r'$\overline{h}_2$')
+    ax[1].axhline(zbar[0], ls='--', color=line1.get_color(), label=r'$\overline{z}_1$')
+    ax[1].axhline(zbar[1], ls='--', color=line2.get_color(), label=r'$\overline{z}_2$')
     ax[1].set_ylabel("Heights")
 
     if plot_disturbance:

@@ -6,8 +6,8 @@ import src.parameters as p
 
 class FourTank:
     """Class modelling the modified four tank system"""
-    def __init__(self, dt, hbar, ubar, seed=0):
-        self.hbar = hbar.copy()
+    def __init__(self, dt, zbar, ubar, seed=0):
+        self.zbar = zbar.copy()
 
         if isinstance(ubar, list) and isinstance(ubar[0], tuple):
             # looks like [(t0, u0), (t1, u1), ...]
@@ -79,7 +79,7 @@ class FourTank:
             raise RuntimeError(f"ODE solver failed: {sol.message}")
         return sol.y[:, -1]
     
-    def simulate(self, t0, tf, m0, ctrl_type="PID"):
+    def simulate(self, t0, tf, h0, ctrl_type="PID"):
         """
         Simulation of the four tank system in the time-interval [t0, tf]
         Choose ctrl_type from ["", "P", "PI", "PID] ("" corresponds to open loop)
@@ -89,6 +89,7 @@ class FourTank:
         N = int(np.ceil((tf-t0) / self.dt))
         t = float(t0)
 
+        m0 = FourTank.height_to_mass(h0)
         m = np.asarray(m0, dtype=float).copy()
         m_prev = m.copy()
 
@@ -117,17 +118,19 @@ class FourTank:
             h_prev = FourTank.mass_to_height(m_prev)
             h = FourTank.mass_to_height(m)
 
-            y_prev = h_prev + v_prev
-            y = h + v
-            self.hist['y'][k] = FourTank.mass_to_height(m) + v
+            y_prev = np.clip(h_prev + v_prev, 0, None)
+            y = np.clip(h + v, 0, None)
+            self.hist['y'][k] = np.clip(FourTank.mass_to_height(m) + v, 0, None)
 
             ubar = self.get_ubar(t)
-            self.controller(ubar, y, y_prev, dt, ctrl_type)
+            self.controller(ubar, y[:2], y_prev[:2], dt, ctrl_type)
             
             d = self.get_disturbance(t)
             
             m_prev = m
             m = self.solve_step(t, m, d, dt)
+            if np.any(m < 0):
+                print('hello')
             t = t + dt
 
             k += 1
@@ -136,17 +139,17 @@ class FourTank:
             self.hist['u'][k] = np.atleast_1d(self.u).astype(float)
         
         self.hist['h'] = FourTank.mass_to_height(self.hist['m'])
-        self.hist['y'][-1] = self.hist['h'][-1] + self.get_measurement_noise(tf)
+        self.hist['y'][-1] = np.clip(self.hist['h'][-1] + self.get_measurement_noise(tf), 0, None)
         td_hist, d_hist = self.get_disturbance_hist()
         self.hist['td'] = td_hist
         self.hist['d'] = d_hist
     
     def controller(self, ubar, y, y_prev, dt, ctrl_type):
-        # PID controller (4 variable input, 2 variable output)
+        # PID controller (2 variable input y1 and y2, 2 variable output u1 and u2)
         if not ctrl_type in ["", "P", "PI", "PID"]:
             raise ValueError("No valid control type chosen")
         
-        e = self.hbar - y
+        e = self.zbar - y
         u_cand = ubar.copy()
         if "P" in ctrl_type:
             P = self.KP @ e
@@ -181,9 +184,9 @@ class FourTank:
         
 
 class Deterministic(FourTank):
-    def __init__(self, dt, hbar, ubar, d):
+    def __init__(self, dt, zbar, ubar, d):
         """d: constant disturbance"""
-        super().__init__(dt, hbar, ubar)
+        super().__init__(dt, zbar, ubar)
         self.d = d
     
     def get_disturbance(self, t):
@@ -199,14 +202,14 @@ class Deterministic(FourTank):
         return np.zeros((4,))
 
 class StochasticPiecewise(FourTank):
-    def __init__(self, dt, hbar, ubar, sig_v, mu_d, sig_d, t_d, seed=0):
+    def __init__(self, dt, zbar, ubar, sig_v, mu_d, sig_d, t_d, seed=0):
         """
         sig_v (scalar): std. dev. for independent measurement noise
         mu_d (length 2): mean disturbance
         sig_d (length 2): std. dev. for disturbances
         t_d (scalar): mean time between disturbances
         """
-        super().__init__(dt, hbar, ubar, seed)
+        super().__init__(dt, zbar, ubar, seed)
 
         self.sig_v = sig_v
         self.mu_d = mu_d
@@ -233,8 +236,8 @@ class StochasticPiecewise(FourTank):
         return self.rng.normal(scale=self.sig_v, size=self.n)
 
 class StochasticBrownian(FourTank):
-    def __init__(self, dt, hbar, ubar, sig_v, sig_sde, seed=0):
-        super().__init__(dt, hbar, ubar, seed)
+    def __init__(self, dt, zbar, ubar, sig_v, sig_sde, seed=0):
+        super().__init__(dt, zbar, ubar, seed)
         self.sig_v = sig_v
         self.sig_sde = sig_sde
     
@@ -258,4 +261,5 @@ class StochasticBrownian(FourTank):
         dW = np.sqrt(dt) * self.rng.normal(size=self.n)
         g = self.get_sde_sigma()
         sol = m + f * dt + g * dW
+        sol = np.clip(sol, 0, None)
         return sol
