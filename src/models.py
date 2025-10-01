@@ -1,5 +1,6 @@
 import numpy as np
 import scipy as sp
+import matplotlib.pyplot as plt
 
 import src.constants as c
 import src.parameters as p
@@ -144,6 +145,10 @@ class FourTank:
         self.hist['td'] = td_hist
         self.hist['d'] = d_hist
     
+    def reset(self):
+        """Reset for simulate."""
+        pass
+    
     def controller(self, ubar, y, y_prev, dt, ctrl_type):
         # PID controller (2 variable input y1 and y2, 2 variable output u1 and u2)
         if not ctrl_type in ["", "P", "PI", "PID"]:
@@ -181,6 +186,50 @@ class FourTank:
             return self.ubar_vals[self.ubar_idx]
         else:
             raise ValueError('Unknown ubar_type')
+    
+    def get_steady_state(self, m0, us, ds):
+        self.u = us
+        rhs_wrap = lambda m,d: self.get_rhs(0, m, d)
+        ms = sp.optimize.fsolve(rhs_wrap, m0, args=(ds,))
+        return ms
+    
+    def step_response(self, h0, us, ds, tf):
+        m0 = FourTank.height_to_mass(h0)
+        ms = self.get_steady_state(m0, us, ds)
+        hs = FourTank.mass_to_height(ms)
+        
+        labels = [r"$h_1$", r"$h_2$", r"$h_3$", r"$h_4$"]
+        linestyles = ["-", "--", ":"]
+
+        plt.figure(figsize=(10,6))
+        incs = [0.10, 0.25, 0.50]
+        for j, inc in enumerate(incs):
+            us_inc = (1 + inc) * us
+            self.ubar = us_inc
+            self.simulate(0, tf, hs, ctrl_type="")
+            for i in range(2):
+                plt.plot(
+                    self.hist['t'], self.hist['h'][:,i],
+                    color=f"C{i}",
+                    linestyle=linestyles[j],
+                    label=labels[i] if j==0 else None
+                )
+        
+        plt.xlabel("Time")
+        plt.ylabel("Height")
+        plt.legend()
+
+        # First legend (tanks)
+        leg1 = plt.legend(title="Tanks", loc="upper left")
+
+        # Second legend (increments / linestyles)
+        from matplotlib.lines import Line2D
+        handles = [Line2D([0], [0], color="k", linestyle=ls, label=f"{100*inc:.0f}\%")
+                for ls, inc in zip(linestyles, incs)]
+        plt.legend(handles=handles, title="Inflow increase", loc="upper right")
+        plt.grid(True)
+        plt.gca().add_artist(leg1)  # keep both legends
+        plt.show()
         
 
 class Deterministic(FourTank):
