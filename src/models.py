@@ -13,10 +13,13 @@ class FourTank:
             # looks like [(t0, u0), (t1, u1), ...]
             self.ubar_type = 'piecewise'
             self.set_ubar_piecewise(ubar)
+            self.u = np.array(ubar[0][1])
         else:
             self.ubar_type = 'constant'
             self.ubar = np.asarray(ubar, float).copy()
-        
+            self.u = self.ubar.copy()
+            
+       
         self.n = 4
         self.dt = dt
 

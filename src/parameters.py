@@ -4,7 +4,7 @@ import src.constants as c
 n = 4
 h0 = np.zeros((4,))
 
-dt = 0.1
+dt = 30
 t0 = 0.0
 tf = 20.0 * 60.0
 nt = int((tf - t0)/dt) + 1
@@ -32,7 +32,7 @@ d_determ = np.full((2,), 100)
 sig_v = 1.0
 
 mu_d = np.array([100.0, 100.0])
-sig_d = np.array([50.0, 50.0])
-t_d = 10
+sig_d = np.array([10.0, 10.0])
+t_d = 100
 
-sig_sde = 50.0
+sig_sde = 30.0

@@ -9,7 +9,7 @@ import src.parameters as p
 FIGDIR = Path('./figs')
 
 plt.rcParams.update({
-    "text.usetex": True,
+    "text.usetex": False,
     "font.family": "serif",
     'font.size': 14,
 })
