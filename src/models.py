@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 
 import src.constants as c
 import src.parameters as p
+import src.plotting
 
 class FourTank:
     """Class modelling the modified four tank system"""
@@ -145,10 +146,6 @@ class FourTank:
         self.hist['td'] = td_hist
         self.hist['d'] = d_hist
     
-    def reset(self):
-        """Reset for simulate."""
-        pass
-    
     def controller(self, ubar, y, y_prev, dt, ctrl_type):
         # PID controller (2 variable input y1 and y2, 2 variable output u1 and u2)
         if not ctrl_type in ["", "P", "PI", "PID"]:
@@ -193,13 +190,14 @@ class FourTank:
         ms = sp.optimize.fsolve(rhs_wrap, m0, args=(ds,))
         return ms
     
-    def step_response(self, h0, us, ds, tf):
+    def step_response(self, h0, us, ds, tf, normalized=False, plot_title="", measurements=False):
         m0 = FourTank.height_to_mass(h0)
         ms = self.get_steady_state(m0, us, ds)
         hs = FourTank.mass_to_height(ms)
         
         labels = [r"$h_1$", r"$h_2$", r"$h_3$", r"$h_4$"]
         linestyles = ["-", "--", ":"]
+        marker_styles = ["o", "s", "^"]
 
         plt.figure(figsize=(10,6))
         incs = [0.10, 0.25, 0.50]
@@ -208,8 +206,22 @@ class FourTank:
             self.ubar = us_inc
             self.simulate(0, tf, hs, ctrl_type="")
             for i in range(2):
+                tt = self.hist['t']
+                hh = self.hist['h'][:,i]
+                yy = self.hist['y'][:,i]
+                
+                if normalized:
+                    yy = (yy - hs[i]) / (hh[-1] - hs[i])
+                    hh = (hh - hs[i]) / (hh[-1] - hs[i])
+                if measurements:
+                    plt.plot(
+                        tt, yy,
+                        marker=marker_styles[j],
+                        color=["lightskyblue", "moccasin"][i],
+                        alpha=0.5, linestyle="None"
+                    )
                 plt.plot(
-                    self.hist['t'], self.hist['h'][:,i],
+                    tt, hh,
                     color=f"C{i}",
                     linestyle=linestyles[j],
                     label=labels[i] if j==0 else None
@@ -224,13 +236,98 @@ class FourTank:
 
         # Second legend (increments / linestyles)
         from matplotlib.lines import Line2D
-        handles = [Line2D([0], [0], color="k", linestyle=ls, label=f"{100*inc:.0f}\%")
+        handles = [Line2D([0], [0], color="k", linestyle=ls, label=f"{100*inc:.0f}\\%")
                 for ls, inc in zip(linestyles, incs)]
         plt.legend(handles=handles, title="Inflow increase", loc="upper right")
         plt.grid(True)
         plt.gca().add_artist(leg1)  # keep both legends
+        plt.title(plot_title)
         plt.show()
-        
+    
+    def get_jacobians(self, hs):
+        """Get the Jacobian matrices for the continuous linearization"""
+        T = c.A / c.a * np.sqrt(2*hs/c.g)
+        A = np.diag(-1/T)
+        A[0, 2] = 1/T[2]
+        A[1, 3] = 1/T[3]
+
+        B = c.rho * np.array([
+            [c.gamma[0], 0],
+            [0, c.gamma[1]],
+            [0, 1 - c.gamma[1]],
+            [1 - c.gamma[0], 0]
+        ], dtype=float)
+
+        C = np.diag(1 / (c.rho * c.A))
+        Cz = C[:2,:]
+
+        Cd = np.array([
+            [0, 0],
+            [0, 0],
+            [c.rho, 0],
+            [0, c.rho]
+        ], dtype=float)
+        return A,B,C,Cz,Cd
+
+    def lin_continuous(self, tf, xs, us, ds):
+        """Continuous linearization around steady state"""
+        t0 = 0
+        hs = FourTank.mass_to_height(xs)
+        A,B,C,Cz,Cd = self.get_jacobians(hs)
+
+        def flin(t,X):
+            u_delta = (self.ubar - us)
+            d_delta = (self.get_disturbance(t) - ds)
+            return A @ X + B @ u_delta + Cd @ d_delta
+        t_eval = np.linspace(t0,tf,200)
+        sollin = sp.integrate.solve_ivp(fun=flin, t_span=(t0,tf), y0=xs-xs, t_eval=t_eval)
+        Xlin = sollin.y
+        Ylin = C @ Xlin
+        ylin = Ylin + hs[:,None]
+        return t_eval, Ylin.T
+
+    def c2dzoh():
+        """Continuous-to-discrete ZOH (zero-order hold)"""
+        pass
+    
+    def lin_discrete():
+        """Discrete linearization around steady state"""
+        pass
+    
+    def plot_lin(self, h0, us, ds, tf, plot_title=""):
+        m0 = FourTank.height_to_mass(h0)
+        ms = self.get_steady_state(m0, us, ds)
+        hs = FourTank.mass_to_height(ms)
+
+        incs = [0.10, 0.25, 0.50]
+        labels = [rf"$h_{i} - (h_s)_{i}$" for i in range(1, 5)]
+
+        fig, axes = plt.subplots(3, 4, figsize=(12, 9))
+        fig.suptitle(plot_title, fontsize=16)
+        for j, inc in enumerate(incs):
+            us_inc = (1 + inc) * us
+            self.ubar = us_inc
+            t_lin, Y_lin = self.lin_continuous(tf, ms, us, ds)
+
+            self.simulate(0, tf, hs, ctrl_type="")
+            t_nonlin = self.hist['t']
+            y_nonlin = self.hist['h']
+            Y_nonlin = y_nonlin - hs
+
+            for i in range(self.n):
+                ax = axes[j, i]
+                ax.set_title(labels[i] if j == 0 else "")  # titles only on first row
+                ax.plot(t_lin, Y_lin[:, i], label='linear')
+                ax.plot(t_nonlin, Y_nonlin[:, i], label='non-linear')
+                ax.grid(True)
+                if i == 0:
+                    ax.set_ylabel(f"Inflow increase: {100*inc:.0f}\\%")
+
+                ax.legend()
+                if j == len(incs) - 1:
+                    ax.set_xlabel(f'$t$')
+        plt.tight_layout()
+        plt.show()
 
 class Deterministic(FourTank):
     def __init__(self, dt, zbar, ubar, d):
@@ -253,6 +350,8 @@ class Deterministic(FourTank):
 class StochasticPiecewise(FourTank):
     def __init__(self, dt, zbar, ubar, sig_v, mu_d, sig_d, t_d, seed=0):
         """
+        Poisson intervalled disturbances.
+        
         sig_v (scalar): std. dev. for independent measurement noise
         mu_d (length 2): mean disturbance
         sig_d (length 2): std. dev. for disturbances
@@ -264,22 +363,29 @@ class StochasticPiecewise(FourTank):
         self.mu_d = mu_d
         self.sig_d = sig_d
         self.t_d = t_d
+        
+        self.generate_disturbances()
+    
+    def generate_disturbances(self):
+        t = 0.0
+        td_hist = [t]
+        d_hist = []
 
-        self.td_hist = [0.]
-        self.d_hist = []
+        while t < p.tf:
+            d_cand = self.mu_d + self.rng.normal(scale=self.sig_d)
+            d_hist.append(np.clip(d_cand, p.umin, p.umax))
+            t += self.rng.exponential(scale=self.t_d)
+            td_hist.append(t)
+        
+        self.td_hist = np.array(td_hist[:-1] + [p.tf])
+        self.d_hist = np.vstack((d_hist, d_hist[-1]))
     
     def get_disturbance(self, t):
-        """Poisson intervalled distrubances"""
-        while t >= self.td_hist[-1]:
-            d_cand = self.mu_d + self.rng.normal(scale=self.sig_d)
-            self.d_hist.append(np.clip(d_cand, p.umin, p.umax))
-            self.td_hist.append(self.td_hist[-1] + self.rng.exponential(scale=self.t_d))
-        return self.d_hist[-1]
+        idx = np.searchsorted(self.td_hist, t, side='right') - 1
+        return self.d_hist[idx]
     
     def get_disturbance_hist(self):
-        td_hist = np.array(self.td_hist[:-1] + [self.tf])
-        d_hist = np.vstack((self.d_hist, self.d_hist[-1]))
-        return td_hist, d_hist
+        return self.td_hist, self.d_hist
 
     def get_measurement_noise(self, t):
         return self.rng.normal(scale=self.sig_v, size=self.n)
