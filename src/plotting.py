@@ -14,7 +14,7 @@ plt.rcParams.update({
     'font.size': 14,
 })
 
-def plot_hist(model, title, plot_disturbance=True, filename=None):
+def plot_hist(model, title, plot_disturbance=True, filename=None,step=True):
     hist = model.hist
     zbar = model.zbar
 
@@ -37,9 +37,14 @@ def plot_hist(model, title, plot_disturbance=True, filename=None):
     ax[1].set_ylabel("Heights")
 
     if plot_disturbance:
-        ax[2].step(hist['td'], hist['d'][:,0], where='post', label=r'$d_1$')
-        ax[2].step(hist['td'], hist['d'][:,1], where='post', label=r'$d_2$')
-        ax[2].set_ylabel("Disturbances")
+        if step:
+            ax[2].step(hist['td'], hist['d'][:,0], where='post', label=r'$d_1$')
+            ax[2].step(hist['td'], hist['d'][:,1], where='post', label=r'$d_2$')
+            ax[2].set_ylabel("Disturbances")
+        else:
+            ax[2].plot(hist['td'], hist['d'][:,0], label=r'$d_1$')
+            ax[2].plot(hist['td'], hist['d'][:,1], label=r'$d_2$')
+            ax[2].set_ylabel("Disturbances")
     
     ax[-1].set_xlabel("time [s]")
     ax[-1].set_xlim(t0, tf)

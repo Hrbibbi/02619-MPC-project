@@ -89,7 +89,7 @@ class FourTank:
         """
         self.t0 = t0
         self.tf = tf
-        N = int(np.ceil((tf-t0) / self.dt))
+        self.N = int(np.ceil((tf-t0) / self.dt))
         t = float(t0)
 
         m0 = FourTank.height_to_mass(h0)
@@ -99,23 +99,23 @@ class FourTank:
         u0 = np.atleast_1d(self.get_ubar(t0)).astype(float)
         nx, nu = m.size, u0.size
 
-        self.hist['t'] = np.empty(N + 1, dtype=float)
-        self.hist['m'] = np.empty((N + 1, nx), dtype=float)
-        self.hist['y'] = np.empty((N + 1, nx), dtype=float) # y is h + noise
-        self.hist['u'] = np.empty((N + 1, nu), dtype=float)
+        self.hist['t'] = np.empty(self.N + 1, dtype=float)
+        self.hist['m'] = np.empty((self.N + 1, nx), dtype=float)
+        self.hist['y'] = np.empty((self.N + 1, nx), dtype=float) # y is h + noise
+        self.hist['u'] = np.empty((self.N + 1, nu), dtype=float)
 
         self.hist['t'][0] = t
         self.hist['m'][0] = m
         self.hist['u'][0] = u0
         
-        k = 0
+        self.k = 0
         v = None
-        while (k < N) and (t < tf):
+        while (self.k < self.N) and (t < tf):
             dt = min(self.dt, tf - t)
-
+            
             v_prev = v
             v = self.get_measurement_noise(t)
-            if k == 0:
+            if self.k == 0:
                 v_prev = v
 
             h_prev = FourTank.mass_to_height(m_prev)
@@ -123,7 +123,7 @@ class FourTank:
 
             y_prev = np.clip(h_prev + v_prev, 0, None)
             y = np.clip(h + v, 0, None)
-            self.hist['y'][k] = np.clip(FourTank.mass_to_height(m) + v, 0, None)
+            self.hist['y'][self.k] = np.clip(FourTank.mass_to_height(m) + v, 0, None)
 
             ubar = self.get_ubar(t)
             self.controller(ubar, y[:2], y_prev[:2], dt, ctrl_type)
@@ -136,10 +136,10 @@ class FourTank:
                 print('hello')
             t = t + dt
 
-            k += 1
-            self.hist['t'][k] = t
-            self.hist['m'][k] = m
-            self.hist['u'][k] = np.atleast_1d(self.u).astype(float)
+            self.k += 1
+            self.hist['t'][self.k] = t
+            self.hist['m'][self.k] = m
+            self.hist['u'][self.k] = np.atleast_1d(self.u).astype(float)
         
         self.hist['h'] = FourTank.mass_to_height(self.hist['m'])
         self.hist['y'][-1] = np.clip(self.hist['h'][-1] + self.get_measurement_noise(tf), 0, None)
@@ -239,30 +239,64 @@ class StochasticPiecewise(FourTank):
         return self.rng.normal(scale=self.sig_v, size=self.n)
 
 class StochasticBrownian(FourTank):
-    def __init__(self, dt, zbar, ubar, sig_v, sig_sde, seed=0):
+    def __init__(self, dt, zbar, ubar, sig_v,Fd,Fs,F0, seed=0):
         super().__init__(dt, zbar, ubar, seed)
         self.sig_v = sig_v
-        self.sig_sde = sig_sde
+        self.n_F = len(Fd)
+        self.Fd3,self.Fd4 = Fd[0],Fd[1]
+        self.Fs3,self.Fs4 = Fs[0],Fs[1]
+        self.F = np.asarray(F0,float)
+        self.d_hist = [self.F.copy()]
+        self.td_hist = [0.]
     
     def get_disturbance(self, t):
-        # This eliminates d in the RHS and extracts f
-        return np.zeros(2)
+        return self.F.copy()
     
     def get_disturbance_hist(self):
-        return None, None
+        return np.array(self.td_hist), np.vstack(self.d_hist)
 
+    def get_rhs_sde(self, t, m,d):
+        # ODE RHS dm/dt = f
+        h = FourTank.mass_to_height(m)
+        q_in, q = self.get_flows(h)
+        f = c.rho * (q_in + np.array([q[2]-q[0],q[3]-q[1],-q[2]+d[0],-q[3]+d[1]]))
+        return f
+    
     def get_measurement_noise(self, t):
         return self.rng.normal(scale=self.sig_v, size=self.n)
+        
+    def get_sde(self,F,t):
+        F3, F4 = F
+        drift = np.array([self.Fd3(F3,t),self.Fd4(F4,t)])
+        sigma = np.array([self.Fs3(F3,t), self.Fs4(F4,t)])
+        return drift,sigma
     
-    def get_sde_sigma(self):
-        # TODO: implement this using potentials instead of constant
-        sigma = np.array([0,0,self.sig_sde, self.sig_sde])
-        return sigma
+    def construct_step(self,m,f,D,S,dW):
+        return np.concatenate([m, self.F]),np.concatenate([f,D]),np.pad(S,(self.n,0),'constant'),np.pad(dW,(self.n,0),'constant')
 
     def solve_step(self, t, m, d, dt):
-        f = self.get_rhs(t, m, d)
-        dW = np.sqrt(dt) * self.rng.normal(size=self.n)
-        g = self.get_sde_sigma()
-        sol = m + f * dt + g * dW
-        sol = np.clip(sol, 0, None)
-        return sol
+        f = self.get_rhs_sde(t, m,d)
+        dW = np.sqrt(dt) * self.rng.normal(size=self.n_F)
+        D,S = self.get_sde(self.F,self.k)
+        m_s,f_s,sig_s,dW_s = self.construct_step(m,f,D,S,dW)
+        sol_s = m_s + f_s*dt+sig_s*dW_s
+        #sol_s = np.clip(sol_s,0,None)
+        sol_m = sol_s[:self.n]
+        sol_m = np.clip(sol_m,0,None)
+        self.F = sol_s[self.n:]
+        self.td_hist.append(t+dt)
+        self.d_hist.append(self.F.copy())
+        return sol_m
+    
+    
+    
+    
+#Deterministic euler step
+#f = self.get_rhs_sde(t, m)
+#sol = m + f * dt
+#sol = np.clip(sol, 0, None)
+##Stochastic euler meruyama step
+#dW = np.sqrt(dt) * self.rng.normal(size=self.n)[2:]
+#D,S = self.get_sde(self.F,t)
+#self.F = self.F + D*dt+S*dW
+#test --
