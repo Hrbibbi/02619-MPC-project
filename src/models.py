@@ -190,7 +190,7 @@ class FourTank:
         ms = sp.optimize.fsolve(rhs_wrap, m0, args=(ds,))
         return ms
     
-    def step_response(self, h0, us, ds, tf, normalized=False, plot_title="", measurements=False):
+    def step_response(self, input_idx, h0, us, ds, tf, normalized=False, plot_title="", measurements=False):
         m0 = FourTank.height_to_mass(h0)
         ms = self.get_steady_state(m0, us, ds)
         hs = FourTank.mass_to_height(ms)
@@ -202,7 +202,8 @@ class FourTank:
         plt.figure(figsize=(10,6))
         incs = [0.10, 0.25, 0.50]
         for j, inc in enumerate(incs):
-            us_inc = (1 + inc) * us
+            us_inc = us.copy()
+            us_inc[input_idx] = (1 + inc) * us_inc[input_idx]
             self.ubar = us_inc
             self.simulate(0, tf, hs, ctrl_type="")
             for i in range(2):
@@ -211,8 +212,8 @@ class FourTank:
                 yy = self.hist['y'][:,i]
                 
                 if normalized:
-                    yy = (yy - hs[i]) / (hh[-1] - hs[i])
-                    hh = (hh - hs[i]) / (hh[-1] - hs[i])
+                    yy = (yy - hs[i]) / (us_inc[input_idx] - us[input_idx])
+                    hh = (hh - hs[i]) / (us_inc[input_idx] - us[input_idx])
                 if measurements:
                     plt.plot(
                         tt, yy,
@@ -228,7 +229,10 @@ class FourTank:
                 )
         
         plt.xlabel("Time")
-        plt.ylabel("Height")
+        ylabel = "Height"
+        if normalized:
+            ylabel += " (normalized)"
+        plt.ylabel(ylabel)
         plt.legend()
 
         # First legend (tanks)
@@ -418,3 +422,6 @@ class StochasticBrownian(FourTank):
         sol = m + f * dt + g * dW
         sol = np.clip(sol, 0, None)
         return sol
+    
+    def get_jacobians(self, hs):
+        super().get_jacobians(hs)
