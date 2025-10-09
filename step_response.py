@@ -80,7 +80,7 @@ def plot_deterministic_steps(percentage_levels, varidx=0, disturbance_level=100,
         model.ubar_type = 'piecewise'
         model.set_ubar_piecewise([
             (p.t0, base_u),
-            (p.tf//2, step_u),
+            (p.tf//10, step_u),
         ])
         model.simulate(p.t0, p.tf, h_ss, ctrl_type="")
 
@@ -107,16 +107,18 @@ def plot_deterministic_steps(percentage_levels, varidx=0, disturbance_level=100,
         ax_y.plot(t, y_plot[:, 0],color="orange", linestyle=ls)
         ax_y.plot(t, y_plot[:, 1],color="blue", linestyle=ls)
         #, label=f"{int(pct*100)}% – h_2"
-        if normalized:
-            pass
-        else:
-            ax_u.plot(t, u[:, varidx],color="orange", linestyle=ls, label=f"{int(pct*100)}% on u1")
+        #if normalized:
+        #    pass
+        #else:
+        #    ax_u.plot(t, u[:, varidx],color="orange", linestyle=ls, label=f"{int(pct*100)}% on u1")
 
     if normalized:
-        ax_u.plot(t, u_plot[:,varidx],color="orange", label="Step on u1")
+        #ax_u.plot(t, u_plot[:,varidx],color="orange", label="Step on u1")
+        ax_u.plot(t, (u[:, 0]-base_u[0])/du,color="orange", label="Step on u1")
         ax_u.plot(t, (u[:, 1]-base_u[1])/du ,color="blue", label="Step on u2")
     else:    
         ax_u.plot(t, u[:, 1], color="blue", label=f"{0} % on u2")
+        ax_u.plot(t, u[:, 0], color="orange", label=f"{0} % on u1")
 
     ax_y.set_title(f"Deterministic normalized steps on u{varidx+1}" if normalized
                    else f"Deterministic steps on u{varidx+1}")
@@ -154,7 +156,7 @@ def plot_deterministic_steps(percentage_levels, varidx=0, disturbance_level=100,
 percentage_levels = np.array([0.10, 0.25, 0.50])
 fig = plot_deterministic_steps(
     percentage_levels=percentage_levels,
-    varidx=0,                  
+    varidx=1,                  
     disturbance_level=100,     
     x0=np.zeros(4),        
     normalized=True,            
