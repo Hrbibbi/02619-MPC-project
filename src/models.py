@@ -190,7 +190,7 @@ class FourTank:
         ms = sp.optimize.fsolve(rhs_wrap, m0, args=(ds,))
         return ms
     
-    def step_response(self, input_idx, h0, us, ds, tf, normalized=False, plot_title="", measurements=False):
+    def step_response(self, input_idx, h0, us, ds, tf, normalized=False, plot_title="", measurements=False, filename=None):
         m0 = FourTank.height_to_mass(h0)
         ms = self.get_steady_state(m0, us, ds)
         hs = FourTank.mass_to_height(ms)
@@ -246,6 +246,8 @@ class FourTank:
         plt.grid(True)
         plt.gca().add_artist(leg1)  # keep both legends
         plt.title(plot_title)
+        if filename is not None:
+            plt.savefig(filename)
         plt.show()
     
     def get_jacobians(self, hs):
@@ -394,34 +396,58 @@ class StochasticPiecewise(FourTank):
     def get_measurement_noise(self, t):
         return self.rng.normal(scale=self.sig_v, size=self.n)
 
-class StochasticBrownian(FourTank):
-    def __init__(self, dt, zbar, ubar, sig_v, sig_sde, seed=0):
+class SDE(FourTank):
+    def __init__(self, dt, zbar, ubar, sig_v, mu_OU, sig_OU, coef_OU, seed=0):
+        """
+        log of the process is Ornstein-Uhlenbeck (OU) to avoid negative values.
+        OU parameters are in log domain and 2-vectors. Assume OU starts at mu_OU.
+        """
         super().__init__(dt, zbar, ubar, seed)
+
         self.sig_v = sig_v
-        self.sig_sde = sig_sde
-    
+        self.mu_OU = mu_OU
+        self.sig_OU = sig_OU
+        self.coef_OU = coef_OU
+
+        self.generate_disturbances()
+
+    def generate_disturbances(self):
+        """
+        Disturbances are independent of the rest of the system.
+        """
+        # dt = np.diff(np.concatenate((np.arange(p.t0, p.tf, self.dt), p.tf)))
+        dt = p.dt
+        N = p.nt
+        dB = self.rng.normal(scale=np.sqrt(dt), size=(N,2))
+        OU = np.zeros((N + 1,2))
+        OU[0] = self.mu_OU
+        for i in range(N-1):
+            OU[i+1] = OU[i] + self.coef_OU * (self.mu_OU - OU[i]) * dt + self.sig_OU * dB[i]
+        
+        td_hist = np.arange(p.t0, p.tf + dt, dt)
+        d_hist = np.exp(OU)
+
+        self.td_hist = td_hist
+        if p.tf % p.dt == 0:
+            self.d_hist = d_hist[:-1]
+        else:
+            self.d_hist = d_hist
+
     def get_disturbance(self, t):
-        # This eliminates d in the RHS and extracts f
-        return np.zeros(2)
+        idx = np.ceil(t / self.dt).astype(int)
+        return self.d_hist[idx]
     
     def get_disturbance_hist(self):
-        return None, None
+        return self.td_hist, self.d_hist
 
     def get_measurement_noise(self, t):
         return self.rng.normal(scale=self.sig_v, size=self.n)
-    
-    def get_sde_sigma(self):
-        # TODO: implement this using potentials instead of constant
-        sigma = np.array([0,0,self.sig_sde, self.sig_sde])
-        return sigma
 
     def solve_step(self, t, m, d, dt):
-        f = self.get_rhs(t, m, d)
-        dW = np.sqrt(dt) * self.rng.normal(size=self.n)
-        g = self.get_sde_sigma()
-        sol = m + f * dt + g * dW
-        sol = np.clip(sol, 0, None)
+        f = self.get_rhs(t, m, d) + np.concatenate((np.zeros(2), self.get_disturbance(t)))
+        sol = m + f * dt
         return sol
     
     def get_jacobians(self, hs):
         super().get_jacobians(hs)
+        # how to linearize the SDE?

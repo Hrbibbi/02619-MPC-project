@@ -36,3 +36,9 @@ sig_d = np.array([10.0, 10.0])
 t_d = 100
 
 sig_sde = 50.0
+
+### SDE disturbance params
+sig_OU = np.full((2,), 0.05)
+coef_OU = np.full((2,), 1/(5*dt))
+mu_log_OU = np.full((2,), 100.0) # desired mean in log domain
+mu_OU = np.log(mu_log_OU) - sig_OU**2 / (4*coef_OU)

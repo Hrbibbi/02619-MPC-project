@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from src.models import Deterministic, StochasticPiecewise, StochasticBrownian
+from src.models import Deterministic, StochasticPiecewise, SDE
 import src.parameters as p
 
 tf = 500
