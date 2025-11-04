@@ -62,15 +62,25 @@ class FourTank:
         q_in, q = self.get_flows(h)
         f = c.rho * (q_in + np.array([q[2]-q[0],q[3]-q[1],-q[2]+d[0],-q[3]+d[1]]))
         return f
-    
+
+    def generate_disturbances(self):
+        raise NotImplementedError
+
     def get_disturbance(self, t):
         raise NotImplementedError
     
     def get_disturbance_hist(self):
         raise NotImplementedError
     
+    def generate_measurement_noise(self):
+        raise NotImplementedError
+    
     def get_measurement_noise(self, t):
         raise NotImplementedError
+
+    def reset_noise(self):
+        self.generate_disturbances()
+        self.generate_measurement_noise()
 
     def solve_step(self, t, m, d, dt):
         sol = sp.integrate.solve_ivp(
@@ -190,62 +200,110 @@ class FourTank:
         ms = sp.optimize.fsolve(rhs_wrap, m0, args=(ds,))
         return ms
     
-    def step_response(self, input_idx, h0, us, ds, tf, normalized=False, plot_title="", measurements=False, filename=None):
+    def step_response(self, h0, us, ds, tf, normalized=False, plot_title="", measurements=False, filename=None):
         m0 = FourTank.height_to_mass(h0)
         ms = self.get_steady_state(m0, us, ds)
         hs = FourTank.mass_to_height(ms)
         
-        labels = [r"$h_1$", r"$h_2$", r"$h_3$", r"$h_4$"]
-        linestyles = ["-", "--", ":"]
-        marker_styles = ["o", "s", "^"]
+        in_labels = [r"$u_1$", r"$u_2$"]
+        out_labels = [r"$h_1$", r"$h_2$"]
 
-        plt.figure(figsize=(10,6))
+        fig,axs = plt.subplots(nrows=2,ncols=2,figsize=(14,9))
+
         incs = [0.10, 0.25, 0.50]
-        for j, inc in enumerate(incs):
-            us_inc = us.copy()
-            us_inc[input_idx] = (1 + inc) * us_inc[input_idx]
-            self.ubar = us_inc
-            self.simulate(0, tf, hs, ctrl_type="")
-            for i in range(2):
-                tt = self.hist['t']
-                hh = self.hist['h'][:,i]
-                yy = self.hist['y'][:,i]
-                
-                if normalized:
-                    yy = (yy - hs[i]) / (us_inc[input_idx] - us[input_idx])
-                    hh = (hh - hs[i]) / (us_inc[input_idx] - us[input_idx])
+        for c in range(2):
+            for i, inc in enumerate(incs):
+                us_inc = us.copy()
+                us_inc[c] = (1 + inc) * us_inc[c]
+                self.ubar = us_inc
                 if measurements:
-                    plt.plot(
-                        tt, yy,
-                        marker=marker_styles[j],
-                        color=["lightskyblue", "moccasin"][i],
-                        alpha=0.5, linestyle="None"
+                    self.reset_noise()
+                self.simulate(0, tf, hs, ctrl_type="")
+                for r in range(2): #height index
+                    ax = axs[r,c]
+                    tt = self.hist['t']
+                    hh = self.hist['h'][:,r]
+                    yy = self.hist['y'][:,r]
+
+                    if measurements:
+                        deviation = hh[:,None] + np.array([[-1,1]])*self.sig_v
+                        if normalized:
+                            deviation = (deviation - hs[r]) / (us_inc[c] - us[c])
+                    
+                    if normalized:
+                        yy = (yy - hs[r]) / (us_inc[c] - us[c])
+                        hh = (hh - hs[r]) / (us_inc[c] - us[c])
+                    
+                    if measurements:
+                        ax.plot(tt, yy, linestyle='-', alpha=0.7, lw=0.5)
+                        ax.plot(
+                            tt, deviation,
+                            linestyle=':', color=f"C{i}"
+                        )
+
+                        # ax.plot(
+                        #     tt, hh[:,None] + np.array([[-1,1]])*self.sig_v,
+                        #     linestyle=':', color=f"C{i}"
+                        # )
+                    ax.plot(
+                        tt, hh,
+                        color=f"C{i}",
+                        linestyle='--' if measurements else '-'
                     )
-                plt.plot(
-                    tt, hh,
-                    color=f"C{i}",
-                    linestyle=linestyles[j],
-                    label=labels[i] if j==0 else None
-                )
+
+                    if r == 0:
+                        ax.set_title(f'Input {c+1} ({in_labels[c]})')
+                    if c == 0:
+                        ylabel = f'Output {r+1}'
+                        if normalized:
+                            ylabel += " (normalized)"
+                        ax.set_ylabel(ylabel)
+                    if r == 1:
+                        ax.set_xlabel("Time")
         
-        plt.xlabel("Time")
-        ylabel = "Height"
-        if normalized:
-            ylabel += " (normalized)"
-        plt.ylabel(ylabel)
-        plt.legend()
+                    ax.grid(True)
 
-        # First legend (tanks)
-        leg1 = plt.legend(title="Tanks", loc="upper left")
-
-        # Second legend (increments / linestyles)
+        ### Legends
         from matplotlib.lines import Line2D
-        handles = [Line2D([0], [0], color="k", linestyle=ls, label=f"{100*inc:.0f}\\%")
-                for ls, inc in zip(linestyles, incs)]
-        plt.legend(handles=handles, title="Inflow increase", loc="upper right")
-        plt.grid(True)
-        plt.gca().add_artist(leg1)  # keep both legends
-        plt.title(plot_title)
+
+        # --- Legend 1: Color meaning (Inflow increase) ---
+        handles_color = [
+            Line2D([0], [0], color=f"C{i}", linestyle='-', label=f"{100*inc:.0f}\\%")
+            for i, inc in enumerate(incs)
+        ]
+
+        # --- Legend 2: Line style meaning (Measurement interpretation) ---
+        handles_style = []
+        if measurements:
+            handles_style = [
+                Line2D([0], [0], color='k', linestyle='-', label=r'$y = h + v$'),
+                Line2D([0], [0], color='k', linestyle='--', label=r'$h$'),
+                Line2D([0], [0], color='k', linestyle=':', label=r'$h \pm \sigma_v$'),
+            ]
+
+        # Leave extra space on the right for legends
+        adj = 0.8
+        d_adj = 0.01
+        plt.subplots_adjust(right=adj)
+
+        # --- Legend 1 (top right, slightly above the second legend) ---
+        fig.legend(
+            handles=handles_color,
+            title="Inflow increase",
+            loc="upper left",
+            bbox_to_anchor=(adj+d_adj, 0.9)
+        )
+
+        # --- Legend 2 (below the first legend) ---
+        if measurements:
+            fig.legend(
+                handles=handles_style,
+                title="Outputs",
+                loc="upper left",
+                bbox_to_anchor=(adj+d_adj, 0.75)
+            )
+        
+        fig.suptitle(plot_title, y=0.95, fontsize=20)
         if filename is not None:
             plt.savefig(filename)
         plt.show()
@@ -300,7 +358,7 @@ class FourTank:
         """Discrete linearization around steady state"""
         pass
     
-    def plot_lin(self, h0, us, ds, tf, plot_title=""):
+    def plot_lin(self, h0, us, ds, tf, plot_title="", filename=None):
         m0 = FourTank.height_to_mass(h0)
         ms = self.get_steady_state(m0, us, ds)
         hs = FourTank.mass_to_height(ms)
@@ -333,6 +391,9 @@ class FourTank:
                 if j == len(incs) - 1:
                     ax.set_xlabel(f'$t$')
         plt.tight_layout()
+        fig.suptitle(plot_title, fontsize=20)
+        if filename is not None:
+            plt.savefig(filename)
         plt.show()
 
 class Deterministic(FourTank):
@@ -370,7 +431,7 @@ class StochasticPiecewise(FourTank):
         self.sig_d = sig_d
         self.t_d = t_d
         
-        self.generate_disturbances()
+        self.reset_noise()
     
     def generate_disturbances(self):
         t = 0.0
@@ -393,8 +454,14 @@ class StochasticPiecewise(FourTank):
     def get_disturbance_hist(self):
         return self.td_hist, self.d_hist
 
+    def generate_measurement_noise(self):
+        N = int(np.ceil((p.tf - p.t0) / self.dt)) + 1
+        self.v_hist = self.rng.normal(scale=self.sig_v, size=(N, self.n))
+
     def get_measurement_noise(self, t):
-        return self.rng.normal(scale=self.sig_v, size=self.n)
+        idx = int(np.ceil(t / self.dt))
+        idx = np.clip(idx, 0, len(self.v_hist) - 1)
+        return self.v_hist[idx]
 
 class SDE(FourTank):
     def __init__(self, dt, zbar, ubar, sig_v, mu_OU, sig_OU, coef_OU, seed=0):
@@ -409,7 +476,7 @@ class SDE(FourTank):
         self.sig_OU = sig_OU
         self.coef_OU = coef_OU
 
-        self.generate_disturbances()
+        self.reset_noise()
 
     def generate_disturbances(self):
         """
@@ -440,8 +507,14 @@ class SDE(FourTank):
     def get_disturbance_hist(self):
         return self.td_hist, self.d_hist
 
+    def generate_measurement_noise(self):
+        N = int(np.ceil((p.tf - p.t0) / self.dt)) + 1
+        self.v_hist = self.rng.normal(scale=self.sig_v, size=(N, self.n))
+
     def get_measurement_noise(self, t):
-        return self.rng.normal(scale=self.sig_v, size=self.n)
+        idx = int(np.ceil(t / self.dt))
+        idx = np.clip(idx, 0, len(self.v_hist) - 1)
+        return self.v_hist[idx]
 
     def solve_step(self, t, m, d, dt):
         f = self.get_rhs(t, m, d) + np.concatenate((np.zeros(2), self.get_disturbance(t)))
