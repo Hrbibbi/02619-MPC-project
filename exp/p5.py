@@ -13,6 +13,14 @@ determ.plot_lin(
     filename='figs/p5/cont_lin_determ.pdf'
 )
 
+determ = Deterministic(p.dt, p.zbar, p.ubar, p.d_determ)
+determ.step_response_lin(
+    p.h0, p.ubar, p.d_determ, tf=tf,
+    plot_title='Continuous linearization -- deterministic model',
+    filename='figs/p5/cont_lin_determ.pdf',
+    normalized=True
+)
+
 
 noise = 5.0
 sig_d = np.array([noise, noise])

@@ -200,7 +200,7 @@ class FourTank:
         ms = sp.optimize.fsolve(rhs_wrap, m0, args=(ds,))
         return ms
     
-    def step_response(self, h0, us, ds, tf, normalized=False, plot_title="", measurements=False, filename=None):
+    def step_response(self, h0, us, ds, tf, incs=[0.10, 0.25, 0.50], normalized=False, read_off=False, plot_title="", measurements=False, filename=None):
         m0 = FourTank.height_to_mass(h0)
         ms = self.get_steady_state(m0, us, ds)
         hs = FourTank.mass_to_height(ms)
@@ -210,7 +210,6 @@ class FourTank:
 
         fig,axs = plt.subplots(nrows=2,ncols=2,figsize=(14,9))
 
-        incs = [0.10, 0.25, 0.50]
         for c in range(2):
             for i, inc in enumerate(incs):
                 us_inc = us.copy()
@@ -219,6 +218,9 @@ class FourTank:
                 if measurements:
                     self.reset_noise()
                 self.simulate(0, tf, hs, ctrl_type="")
+                
+                ms_new = self.get_steady_state(ms, us_inc, ds)
+                hs_new = FourTank.mass_to_height(ms_new)
                 for r in range(2): #height index
                     ax = axs[r,c]
                     tt = self.hist['t']
@@ -260,6 +262,21 @@ class FourTank:
                         ax.set_ylabel(ylabel)
                     if r == 1:
                         ax.set_xlabel("Time")
+                        
+                    if read_off:
+                        gain = (hs_new[r] - hs[r]) / (us_inc[c] - us[c])
+                        ax.axhline(gain, ls='--', color='black', alpha=0.5, label='gain')
+                        if r == c:
+                            # first order case
+                            ix = np.argmax(hh > 0.632*gain)
+                            ax.plot(2*[tt[ix]], [0,hh[ix]], ls='-', color='red', label=r"63.2\%")
+                        else:
+                            # second order case
+                            ix1 = np.argmax(hh > 0.353*gain)
+                            ix2 = np.argmax(hh > 0.853*gain)
+                            ax.plot(2*[tt[ix1]], [0,hh[ix1]], ls='-', color='red', label=r"35.3\%")
+                            ax.plot(2*[tt[ix2]], [0,hh[ix2]], ls='-', color='red', label=r"85.3\%")
+                        ax.legend()
         
                     ax.grid(True)
 
@@ -358,6 +375,68 @@ class FourTank:
         """Discrete linearization around steady state"""
         pass
     
+    def markov_params(self, Ts, n, h0, us, ds, filename=None):
+        """Deterministic/stochastic piecewise"""
+        # The coordinate (i,j) of the matrix corresponds to impulse response from input to output so input j and output i
+        def calc_hat_matrices():
+            n_eval = 200
+            dTs = Ts/n_eval
+            dexp = sp.linalg.expm(A*dTs)
+            integrand = dexp
+            I = np.zeros(A.shape)
+            for i in range(n_eval-1):
+                integrand = integrand @ dexp
+                I += dTs * integrand
+            
+            Ahat = sp.linalg.expm(A*Ts)
+            Bhat = I @ B
+            Cd_hat = I @ Cd
+            Cz_hat = Cd_hat
+            return Ahat,Bhat,Cd_hat,Cz_hat
+
+        def calc_markov_matrix(n, Ahat, Bhat, Cz_hat):
+            A = Ahat
+            B = Bhat
+            C = Cz_hat
+            ns = np.arange(n+1)
+            M = np.zeros((2,2,n+1))
+            for n in ns:
+                M[:,:,n] = np.array([
+                    [
+                        C[0,0] * A[0,0]**n * B[0,0],
+                        C[0,0]*A[0,0]*B[0,1] + C[0,0]*A[0,2] / (A[0,0]-A[2,2]) * (A[0,0]**n - A[2,2]**n)*B[2,1]
+                    ],
+                    [
+                        C[1,1]*A[1,1]*B[1,0] + C[1,1]*A[1,3] / (A[0,0]-A[2,2]) * (A[1,1]**n - A[3,3]**n)*B[3,0],
+                        C[1,1] * A[1,1]**n * B[1,1]
+                    ]
+                ])
+            return M
+        
+        m0 = FourTank.height_to_mass(h0)
+        ms = self.get_steady_state(m0, us, ds)
+        hs = FourTank.mass_to_height(ms)
+        A,B,C,Cz,Cd = self.get_jacobians(hs)
+        Ahat,Bhat,Cd_hat,Cz_hat = calc_hat_matrices()
+        M = calc_markov_matrix(n, Ahat, Bhat, Cz_hat)
+        
+        t = np.arange(0, M.shape[2]*Ts, Ts)
+        fig,ax = plt.subplots(2,2,figsize=(12,8))
+        for i in range(2):
+            for j in range(2):
+                ax[i,j].plot(t, M[i,j])
+                ax[i,j].grid(True)
+                if i == 0:
+                    ax[i,j].set_title(f'Input {j+1}')
+                if j == 0:
+                    ax[i,j].set_ylabel(f'Output {i+1}', fontsize=18)
+        
+        plt.tight_layout()
+        if filename is not None:
+            plt.savefig(filename)
+        plt.show()
+        
+    
     def plot_lin(self, h0, us, ds, tf, plot_title="", filename=None):
         m0 = FourTank.height_to_mass(h0)
         ms = self.get_steady_state(m0, us, ds)
@@ -395,6 +474,122 @@ class FourTank:
         if filename is not None:
             plt.savefig(filename)
         plt.show()
+    
+    def plot_lin2(self, h0, us, ds, tf, plot_title="", filename=None, normalized=True):
+        m0 = FourTank.height_to_mass(h0)
+        ms = self.get_steady_state(m0, us, ds)
+        hs = FourTank.mass_to_height(ms)
+
+        # incs = [0.10, 0.25, 0.50]
+        incs = np.linspace(0.1,1,10)
+        labels = [rf"$h_{i} - (h_s)_{i}$" for i in range(1, 5)]
+
+        fig, axes = plt.subplots(4,1, figsize=(9, 18))
+        fig.suptitle(plot_title, fontsize=16)
+        for j, inc in enumerate(incs):
+            us_inc = (1 + inc) * us
+            self.ubar = us_inc
+            t_lin, Y_lin = self.lin_continuous(tf, ms, us, ds)
+
+            self.simulate(0, tf, hs, ctrl_type="")
+            t_nonlin = self.hist['t']
+            # y_nonlin = self.hist['h']
+            # Y_nonlin = y_nonlin - hs
+
+            for i in range(self.n):
+                hh_nonlin = self.hist['h'][:,i]
+                hh_lin = Y_lin[:,i]
+
+                if normalized:
+                    hh_nonlin = (hh_nonlin - hs[i]) / (us_inc[i] - us[i])
+                    hh_lin = (hh_lin - hs[i]) / (us_inc[j] - us[j])
+                ax = axes[i]
+                ax.plot(t_lin, hh_lin, label=f'linear: {100*inc:.0f}\\%')
+                ax.plot(t_nonlin, hh_nonlin, label=f'non-linear: {100*inc:.0f}\\%')
+                if j == 0:
+                    ax.set_title(labels[i] if j == 0 else "")  # titles only on first row
+                    ax.grid(True)
+
+                ax.legend()
+                if j == len(incs) - 1:
+                    ax.set_xlabel(f'$t$')
+        plt.tight_layout()
+        fig.suptitle(plot_title, fontsize=20)
+        if filename is not None:
+            plt.savefig(filename)
+        plt.show()
+    
+    def step_response_lin(self, h0, us, ds, tf, incs=[0.10, 0.25, 0.50], normalized=False, plot_title="", filename=None):
+        m0 = FourTank.height_to_mass(h0)
+        ms = self.get_steady_state(m0, us, ds)
+        hs = FourTank.mass_to_height(ms)
+        
+        in_labels = [r"$u_1$", r"$u_2$"]
+        out_labels = [r"$h_1$", r"$h_2$"]
+
+        fig,axs = plt.subplots(nrows=2,ncols=2,figsize=(14,9))
+
+        for c in range(2):
+            for i, inc in enumerate(incs):
+                us_inc = us.copy()
+                us_inc[c] = (1 + inc) * us_inc[c]
+                self.ubar = us_inc
+                tt, Y_lin = self.lin_continuous(tf, ms, us, ds)
+                
+                ms_new = self.get_steady_state(ms, us_inc, ds)
+                hs_new = FourTank.mass_to_height(ms_new)
+                for r in range(2): #height index
+                    ax = axs[r,c]
+                    hh = Y_lin[:,r]
+
+                    if normalized:
+                        hh = hh / (us_inc[c] - us[c])
+                        
+                    ax.plot(
+                        tt, hh,
+                        color=f"C{i}",
+                        linestyle='-'
+                    )
+
+                    if r == 0:
+                        ax.set_title(f'Input {c+1} ({in_labels[c]})')
+                    if c == 0:
+                        ylabel = f'Output {r+1}'
+                        if normalized:
+                            ylabel += " (normalized)"
+                        ax.set_ylabel(ylabel)
+                    if r == 1:
+                        ax.set_xlabel("Time")
+        
+                    ax.grid(True)
+
+        ### Legends
+        from matplotlib.lines import Line2D
+
+        # --- Legend 1: Color meaning (Inflow increase) ---
+        handles_color = [
+            Line2D([0], [0], color=f"C{i}", linestyle='-', label=f"{100*inc:.0f}\\%")
+            for i, inc in enumerate(incs)
+        ]
+
+        # Leave extra space on the right for legends
+        adj = 0.8
+        d_adj = 0.01
+        plt.subplots_adjust(right=adj)
+
+        # --- Legend 1 (top right, slightly above the second legend) ---
+        fig.legend(
+            handles=handles_color,
+            title="Inflow increase",
+            loc="upper left",
+            bbox_to_anchor=(adj+d_adj, 0.9)
+        )
+        
+        fig.suptitle(plot_title, y=0.95, fontsize=20)
+        if filename is not None:
+            plt.savefig(filename)
+        plt.show()
+        
 
 class Deterministic(FourTank):
     def __init__(self, dt, zbar, ubar, d):
