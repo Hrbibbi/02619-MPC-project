@@ -1,10 +1,13 @@
 import numpy as np
 import scipy as sp
 import matplotlib.pyplot as plt
+import casadi as ca
 
 import src.constants as c
 import src.parameters as p
 import src.plotting
+
+from tqdm import tqdm
 
 class FourTank:
     """Class modelling the modified four tank system"""
@@ -47,19 +50,19 @@ class FourTank:
         out = m[:2] / (c.rho * c.A[:2])
         return out
 
-    def get_flows(self, h):
+    def get_flows(self, h, u):
         # Get flows q and q_in
         q = np.zeros(self.n)
         q_in = np.array(
-            [c.gamma[0]*self.u[0], c.gamma[1]*self.u[1], (1-c.gamma[1])*self.u[1], (1-c.gamma[0])*self.u[0]]
+            [c.gamma[0]*u[0], c.gamma[1]*u[1], (1-c.gamma[1])*u[1], (1-c.gamma[0])*u[0]]
         )
         q = c.a * np.sqrt(2 * c.g * h)
         return q_in, q
     
-    def get_rhs(self, t, m, d):
+    def get_rhs(self, t, m, u, d):
         # ODE RHS dm/dt = f
         h = FourTank.mass_to_height(m)
-        q_in, q = self.get_flows(h)
+        q_in, q = self.get_flows(h, u)
         f = c.rho * (q_in + np.array([q[2]-q[0],q[3]-q[1],-q[2]+d[0],-q[3]+d[1]]))
         return f
 
@@ -82,10 +85,10 @@ class FourTank:
         self.generate_disturbances()
         self.generate_measurement_noise()
 
-    def solve_step(self, t, m, d, dt):
+    def solve_step(self, t, m, u, d, dt):
         sol = sp.integrate.solve_ivp(
             self.get_rhs, (t, t + dt), m, t_eval=[t + dt],
-            args=(d,), rtol=1e-6, atol=1e-8
+            args=(u,d), rtol=1e-6, atol=1e-8
         )
         if not sol.success:
             raise RuntimeError(f"ODE solver failed: {sol.message}")
@@ -135,12 +138,12 @@ class FourTank:
             self.hist['y'][k] = np.clip(FourTank.mass_to_height(m) + v, 0, None)
 
             ubar = self.get_ubar(t)
-            self.controller(ubar, y[:2], y_prev[:2], dt, ctrl_type)
+            u = self.controller(ubar, y[:2], y_prev[:2], dt, ctrl_type)
             
             d = self.get_disturbance(t)
             
             m_prev = m
-            m = self.solve_step(t, m, d, dt)
+            m = self.solve_step(t, m, u, d, dt)
             if np.any(m < 0):
                 print('hello')
             t = t + dt
@@ -148,7 +151,7 @@ class FourTank:
             k += 1
             self.hist['t'][k] = t
             self.hist['m'][k] = m
-            self.hist['u'][k] = np.atleast_1d(self.u).astype(float)
+            self.hist['u'][k] = np.atleast_1d(u).astype(float)
         
         self.hist['h'] = FourTank.mass_to_height(self.hist['m'])
         self.hist['y'][-1] = np.clip(self.hist['h'][-1] + self.get_measurement_noise(tf), 0, None)
@@ -173,10 +176,12 @@ class FourTank:
             u_cand += D
             
         free = (u_cand > p.umin) & (u_cand < p.umax) 
-        self.u = np.clip(u_cand, p.umin, p.umax)
+        u = np.clip(u_cand, p.umin, p.umax)
 
         if "I" in ctrl_type:
             self.I += (self.KI @ e) * free * dt
+        
+        return u
     
     def set_ubar_piecewise(self, segments):
         self.ubar_piecewise = True
@@ -195,9 +200,8 @@ class FourTank:
             raise ValueError('Unknown ubar_type')
     
     def get_steady_state(self, m0, us, ds):
-        self.u = us
-        rhs_wrap = lambda m,d: self.get_rhs(0, m, d)
-        ms = sp.optimize.fsolve(rhs_wrap, m0, args=(ds,))
+        rhs_wrap = lambda m,u,d: self.get_rhs(0, m, u, d)
+        ms = sp.optimize.fsolve(rhs_wrap, m0, args=(us,ds))
         return ms
     
     def step_response(self, h0, us, ds, tf, incs=[0.10, 0.25, 0.50], normalized=False, read_off=False, plot_title="", measurements=False, filename=None):
@@ -359,8 +363,10 @@ class FourTank:
         def flin(t,X):
             u_delta = (self.ubar - us)
             d_delta = (self.get_disturbance(t) - ds)
+            # print(u_delta,d_delta)
             return A @ X + B @ u_delta + Cd @ d_delta
-        t_eval = np.linspace(t0,tf,200)
+        # t_eval = np.linspace(t0,tf,200)
+        t_eval = np.arange(t0,tf+self.dt,self.dt)
         sollin = sp.integrate.solve_ivp(fun=flin, t_span=(t0,tf), y0=xs-xs, t_eval=t_eval)
         Xlin = sollin.y
         Ylin = C @ Xlin
@@ -424,7 +430,7 @@ class FourTank:
         fig,ax = plt.subplots(2,2,figsize=(12,8))
         for i in range(2):
             for j in range(2):
-                ax[i,j].plot(t, M[i,j])
+                ax[i,j].plot(t, M[i,j], '.')
                 ax[i,j].grid(True)
                 if i == 0:
                     ax[i,j].set_title(f'Input {j+1}')
@@ -589,7 +595,153 @@ class FourTank:
         if filename is not None:
             plt.savefig(filename)
         plt.show()
-        
+    
+    def lin_valid_region(self, h0, us, ds, tf, span=0.30, N=25,
+                             axes_in_percent=True, log_scale=False, filename=None):
+        """
+        Compute and (optionally) plot the region in (u1, u2) where the linear model
+        deviates from the nonlinear model by at most `thresh` (e.g. 0.10 = 10%).
+
+        Parameters
+        ----------
+        h0 : array-like
+            Initial heights (used to build m0, then steady-state at us).
+        us : array-like, shape (nu,)
+            Nominal input vector. Region is evaluated around us[0], us[1].
+        ds : array-like
+            Disturbance vector passed into both simulations.
+        tf : float
+            Final time for simulations.
+        span : float
+            +/- span around each coordinate (0.30 means 70%..130% of nominal).
+        N : int
+            Grid resolution per axis (N x N simulations).
+        log_scale : bool
+            If True, color scale is logarithmic.
+        axes_in_percent : bool
+            If True, plot x/y axes as percent deviation from steady-state us.
+            i.e. 100*(u/us - 1). Simulations still run in absolute units.
+
+        Returns
+        -------
+        U1, U2 : 2D arrays, shape (N, N)
+            Meshgrid for u1 and u2.
+        err : 2D float array, shape (N, N)
+            The scalar error value at each grid point.
+        """
+        m0 = FourTank.height_to_mass(h0)
+        ms = self.get_steady_state(m0, us, ds)
+        hs = FourTank.mass_to_height(ms)
+
+        u1_nom, u2_nom = us[0], us[1]
+        u1_vals = np.linspace((1 - span) * u1_nom, (1 + span) * u1_nom, N)
+        u2_vals = np.linspace((1 - span) * u2_nom, (1 + span) * u2_nom, N)
+        U1, U2 = np.meshgrid(u1_vals, u2_vals, indexing="xy")
+
+        err = np.full((N, N), np.nan, dtype=float)
+
+        for j in range(N):
+            for i in range(N):
+                u = np.array([U1[j, i],U2[j, i]])
+
+                self.ubar = u
+                t_lin, Y_lin = self.lin_continuous(tf, ms, us, ds)
+                self.simulate(0, tf, hs, ctrl_type="")
+
+                t_nonlin = self.hist["t"]
+                y_nonlin = self.hist["h"]
+                Y_nonlin = y_nonlin - hs
+
+                e = np.max(np.abs((Y_lin-Y_nonlin)/hs))
+
+                err[j, i] = e
+
+                # if anomaly_count == 0 and e > 50:
+                    # anomaly_count += 1
+                if i == N//2 and j==N//2:
+                    # print('u: ',u)
+                    # print('e: ',e)
+                    fig,ax=plt.subplots(1,2)
+                    for i in range(2):
+                        ax[i].plot(t_lin,Y_lin[:,i],label='lin')
+                        ax[i].plot(t_nonlin,Y_nonlin[:,i],label='nonlin')
+                        plt.legend()
+                    plt.show()
+
+        from matplotlib.colors import ListedColormap
+
+        # ---- 4) Plot validity region in (u1, u2) ----
+        fig, ax = plt.subplots(1, 1, figsize=(7, 6))
+
+        from matplotlib.colors import LogNorm, Normalize
+
+        # ---- Robust limits ----
+        err_finite = err[np.isfinite(err)]
+
+        if log_scale:
+            # Log scale requires strictly positive values
+            err_pos = err_finite[err_finite > 0]
+
+            if err_pos.size == 0:
+                raise ValueError("Log scale requested but no positive error values found.")
+
+            vmin = err_pos.min()
+            vmax = err_pos.max()
+
+            if vmax <= vmin:
+                vmax = 10 * vmin
+
+            norm = LogNorm(vmin=vmin, vmax=vmax)
+
+        else:
+            # Linear scale
+            vmin = err_finite.min()
+            vmax = err_finite.max()
+
+            if vmax <= vmin:
+                vmax = vmin + 1e-12
+
+            norm = Normalize(vmin=vmin, vmax=vmax)
+
+        if axes_in_percent:
+            if u1_nom == 0 or u2_nom == 0:
+                raise ValueError("axes_in_percent=True requires us[0] and us[1] to be non-zero.")
+
+            U1_plot = 100.0 * (U1 / u1_nom - 1.0)
+            U2_plot = 100.0 * (U2 / u2_nom - 1.0)
+
+            u1_mark, u2_mark = 0.0, 0.0  # steady state is 0% deviation
+            xlabel = r'\% step response in $u_1$'
+            ylabel = r'\% step response in $u_2$'
+        else:
+            U1_plot, U2_plot = U1, U2
+            u1_mark, u2_mark = u1_nom, u2_nom
+            xlabel = r'$u_1$'
+            ylabel = r'$u_2$'
+
+        pcm = ax.pcolormesh(
+            U1_plot, U2_plot, err,
+            shading="nearest",
+            norm=norm,
+            cmap="viridis"
+        )
+
+        cbar = fig.colorbar(pcm, ax=ax)
+        cbar.set_label(r"max relative error")
+
+        ax.plot(u1_mark, u2_mark, "o", markersize=6, label=r'$u_s$', color='red')
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.grid(True)
+        plt.legend()
+
+        plt.tight_layout()
+        if filename:
+            plt.savefig(filename)
+        plt.show()
+
+        return U1, U2, err
 
 class Deterministic(FourTank):
     def __init__(self, dt, zbar, ubar, d):
@@ -659,19 +811,72 @@ class StochasticPiecewise(FourTank):
         return self.v_hist[idx]
 
 class SDE(FourTank):
-    def __init__(self, dt, zbar, ubar, sig_v, mu_OU, sig_OU, coef_OU, seed=0):
+    def __init__(self, dt, zbar, ubar, sig_v, mu_log_OU, sig_OU, coef_OU, seed=0):
         """
-        log of the process is Ornstein-Uhlenbeck (OU) to avoid negative values.
-        OU parameters are in log domain and 2-vectors. Assume OU starts at mu_OU.
+        log of the process, F, is Ornstein-Uhlenbeck (OU) to avoid negative values.
+        OU parameters are in log domain, Y, and 2-vectors. Assume OU starts at mu_OU.
+        We have Y = log F
         """
         super().__init__(dt, zbar, ubar, seed)
 
         self.sig_v = sig_v
-        self.mu_OU = mu_OU
         self.sig_OU = sig_OU
         self.coef_OU = coef_OU
 
+        # ---- mu_log_OU: constant or piecewise schedule ----
+        if isinstance(mu_log_OU, list) and len(mu_log_OU) > 0 and isinstance(mu_log_OU[0], tuple):
+            self.mu_OU_type = "piecewise"
+            self.set_mu_OU_piecewise(mu_log_OU)   # converts + stores internal mu_OU pieces
+        else:
+            self.mu_OU_type = "constant"
+            self.mu_OU = self.mu_log_to_mu_OU(mu_log_OU)
+
         self.reset_noise()
+    
+    def mu_log_to_mu_OU(self, mu_log):
+        mu_log = np.asarray(mu_log, float)
+        if np.any(mu_log <= 0):
+            raise ValueError("mu_log_OU must be strictly positive (since log(mu_log_OU) is used).")
+        return np.log(mu_log) - (self.sig_OU**2) / (4.0 * self.coef_OU)
+
+    def set_mu_OU_piecewise(self, segments):
+        """
+        segments: [(t0, mu_log0), (t1, mu_log1), ...]
+        mu_logk is desired mean in original domain (positive), length-2.
+
+        We store converted mu_OU values (log OU mean) aligned to sorted times.
+        """
+        # sort by time to make searchsorted valid
+        seg = sorted(((float(t), np.asarray(mu_log, float)) for (t, mu_log) in segments),
+                     key=lambda x: x[0])
+
+        self.mu_OU_times = np.array([t for (t, _) in seg], dtype=float)
+        self.mu_OU_vals = np.vstack([self.mu_log_to_mu_OU(mu_log) for (_, mu_log) in seg]).astype(float)
+
+        # optional: enforce strictly increasing times
+        if np.any(np.diff(self.mu_OU_times) <= 0):
+            raise ValueError("mu_log_OU piecewise times must be strictly increasing.")
+    
+    def get_mu_OU(self, t):
+        """
+        Return mu_OU(t) where mu_OU is the OU mean in log-state domain.
+
+        Piecewise convention:
+        - segments are left-closed/right-open: [t_k, t_{k+1})
+        - for t < t0, use the first segment
+        - for t >= last breakpoint, use the last segment
+        """
+        if self.mu_OU_type == "constant":
+            return self.mu_OU
+
+        if self.mu_OU_type == "piecewise":
+            # idx = largest k such that mu_OU_times[k] <= t
+            idx = np.searchsorted(self.mu_OU_times, t, side="right") - 1
+            idx = int(np.clip(idx, 0, len(self.mu_OU_times) - 1))
+            return self.mu_OU_vals[idx]
+
+        raise ValueError("Unknown mu_OU_type")
+
 
     def generate_disturbances(self):
         """
@@ -680,11 +885,14 @@ class SDE(FourTank):
         # dt = np.diff(np.concatenate((np.arange(p.t0, p.tf, self.dt), p.tf)))
         dt = p.dt
         N = p.nt
-        dB = self.rng.normal(scale=np.sqrt(dt), size=(N,2))
+        t = p.t0
+        self.dB = self.rng.normal(scale=np.sqrt(dt), size=(N,2))
+        dB = self.dB
         OU = np.zeros((N + 1,2))
-        OU[0] = self.mu_OU
+        OU[0] = self.get_mu_OU(t)
         for i in range(N-1):
-            OU[i+1] = OU[i] + self.coef_OU * (self.mu_OU - OU[i]) * dt + self.sig_OU * dB[i]
+            OU[i+1] = OU[i] + self.coef_OU * (self.get_mu_OU(t) - OU[i]) * dt + self.sig_OU * dB[i]
+            t += dt
         
         td_hist = np.arange(p.t0, p.tf + dt, dt)
         d_hist = np.exp(OU)
@@ -711,11 +919,227 @@ class SDE(FourTank):
         idx = np.clip(idx, 0, len(self.v_hist) - 1)
         return self.v_hist[idx]
 
-    def solve_step(self, t, m, d, dt):
-        f = self.get_rhs(t, m, d) + np.concatenate((np.zeros(2), self.get_disturbance(t)))
+    def solve_step(self, t, m, u, d, dt):
+        f = self.get_rhs(t, m, u, d)
         sol = m + f * dt
         return sol
     
     def get_jacobians(self, hs):
         super().get_jacobians(hs)
         # how to linearize the SDE?
+
+    def get_V(self,t,F):
+        # Currently, Ybar is constant, so independent of t, but could change.
+        V = 0.5*F*self.sig_OU**2 - F*self.coef_OU*np.log(F) + F*self.coef_OU*self.get_mu_OU(t)
+        return V
+
+    def get_drift(self, t, X, u):
+        """Get drift term f of SDE"""
+        m,d = X[:4],X[4:]        
+        f_m = self.get_rhs(t, m, u, d)
+        f = np.concatenate((f_m, self.get_V(t,d)))
+        return f
+    
+    def get_jacobians(self, t,x):
+        """Jacobians for SDE model"""
+        h = self.mass_to_height(x[:4])
+        T = c.A / c.a * np.sqrt(2*h/c.g)
+        A = np.zeros((6,6))
+        # dV/dF = \sigma^2/2 - a \ln(F) - a + a\bar{Y}
+        # dV/d\bar{Y} = aF
+        dVdF = [self.sig_OU[i]**2/2 + self.coef_OU[i]*(-np.log(F)-1+self.get_mu_OU(t)[i]) for i,F in enumerate(x[4:])]
+        dVdYbar = [self.coef_OU[i]*F for i,F in enumerate(x[4:])]
+        A = np.diag(np.concatenate((-1/T, dVdF)))
+        A[0, 2] = 1/T[2]
+        A[1, 3] = 1/T[3]
+        A[2, 4] = c.rho
+        A[3, 5] = c.rho
+
+        B = c.rho * np.array([
+            [c.gamma[0], 0],
+            [0, c.gamma[1]],
+            [0, 1 - c.gamma[1]],
+            [1 - c.gamma[0], 0],
+            [0, 0],
+            [0, 0],
+        ], dtype=float)
+        
+        CD = np.zeros((6,2))
+        CD[4,0] = dVdYbar[0]
+        CD[5,1] = dVdYbar[1]
+        
+        D = np.zeros((6,2))
+        
+        # mu_F = self.get_mu_OU_original(self.get_mu_OU(t))
+        # D[4,0] = mu_F[0]*self.sig_OU[0]
+        # D[5,1] = mu_F[1]*self.sig_OU[1]
+        D[4,0] = x[4]*self.sig_OU[0]
+        D[5,1] = x[5]*self.sig_OU[1]
+        return A,B,CD,D
+    
+    def lin_continuous(self, tf, xs, us, ds):
+        """Continuous linearization around steady state"""
+        def refine_brownian_simple(dB, dt, k):
+            """
+            Refine coarse Brownian increments to a k-times finer grid, enforcing that
+            each block of k fine increments sums exactly to the original coarse increment.
+
+            Parameters
+            ----------
+            dB : ndarray, shape (N, dim)
+                Coarse Brownian increments.
+            dt : float
+                Coarse time step.
+            k : int
+                Refinement factor (e.g. 10 => 10 fine steps per coarse step).
+
+            Returns
+            -------
+            dB_fine : ndarray, shape (N*k, dim)
+                Fine increments. For each i: sum(dB_fine[i*k:(i+1)*k]) == dB[i].
+            """
+
+            dB = np.asarray(dB)
+            if dB.ndim != 2:
+                raise ValueError("dB must have shape (N, dim)")
+
+            N, dim = dB.shape
+            dt_fine = dt / k
+
+            # 1) Propose independent fine increments at the right scale
+            fine = self.rng.normal(scale=np.sqrt(dt_fine), size=(N, k, dim))
+
+            # 2) Compute the sum over each coarse interval
+            S = fine.sum(axis=1, keepdims=True)  # shape (N, 1, dim)
+
+            # 3) Add a constant correction to each of the k sub-increments so totals match
+            correction = (dB[:, None, :] - S) / k  # shape (N, 1, dim)
+            fine = fine + correction               # broadcast over k
+
+            return fine.reshape(N * k, dim)
+        t0 = 0
+        hs = FourTank.mass_to_height(xs)
+        Xs = np.concatenate((xs,ds))
+        A,B,Cd,D = SDE.get_jacobians(self,t0,Xs)
+
+        steps_per_sampling_time = 1
+        dt = self.dt/steps_per_sampling_time
+        t_eval = np.arange(t0,tf+dt,dt)
+        N = len(t_eval)
+        # dB = refine_brownian_simple(self.dB,self.dt,steps_per_sampling_time)
+        dB = self.dB
+        X = np.zeros((N,6))
+        u_delta = (self.ubar - us)
+        for i,t in enumerate(t_eval[:-1]):
+            X[i+1,:] = X[i] + A @ X[i] * dt + B @ u_delta * dt + D @ dB[i]
+
+        Ylin = self.mass_to_height(X[::steps_per_sampling_time,:4] + xs) - hs
+        t_eval = t_eval[::steps_per_sampling_time]
+        # def flin(t,X):
+        #     u_delta = (self.ubar - us)
+        #     d_delta = (self.get_disturbance(t) - ds)
+        #     # print(u_delta, d_delta)
+        #     # X = np.concatenate((x,d_delta))
+        #     return A @ X + B @ u_delta + Cd @ d_delta + D @ 
+        # # t_eval = np.linspace(t0,tf,200)
+        # t_eval = np.arange(t0,tf+self.dt,self.dt)
+        # sollin = sp.integrate.solve_ivp(fun=flin, t_span=(t0,tf), y0=Xs-Xs, t_eval=t_eval)
+        # Xlin = sollin.y
+        # Ylin = np.diag(1 / (c.rho * c.A)) @ Xlin[:4,:]
+        # ylin = Ylin + hs[:,None]
+        return t_eval, Ylin
+
+    def get_mu_OU_original(self,Ybar):
+        """Get mean of original process F = exp(Y)"""
+        Fbar = np.exp(Ybar+self.sig_OU/(4*self.coef_OU))
+        return Fbar
+
+    def extended_kalman_NMPC(self, t0, tf, h0, filename=''):
+        """Continuous-Discrete Extended Kalman Filter"""
+        self.simulate(t0, tf, h0, ctrl_type="")
+
+        tt = self.hist['t']
+        hh = self.hist['h']
+        yy = self.hist['y']
+        dd = self.hist['d']
+        uu = self.hist['u']
+        
+        m0 = self.height_to_mass(h0)
+        X0_hat = np.concatenate((m0,self.get_mu_OU_original(self.get_mu_OU(tt[0]))))
+        P0_hat = np.eye(6)
+        N = len(tt)
+        
+        def precompute_var(X):
+            """Precomputed matrices for fun_var: dP/dt = FP(t) + P(t)F^T + Q, Q=GG^T"""
+            G = np.zeros((6,2))
+            G[4,0] = X[4]*self.sig_OU[0]
+            G[5,1] = X[5]*self.sig_OU[1]
+            F = A
+            Q = G @ G.T
+            return F,Q
+
+        def fun_mean(t, X, u):
+            f = self.get_drift(t,X,u)
+            return f
+
+        def fun_var(t, P):
+            """P has to be a 1D array for solve_ivp, so reshaping is done inside fun. G and F are assumed constant at the initival values."""
+            # dV/dF = \sigma^2/2 - a \ln(F) - a + a\bar{Y}
+            P = P.reshape((6,6))
+            dPdt = F @ P + P @ F.T + Q
+            return dPdt.reshape(-1)
+        
+        def get_dHdX(t, X):
+            dHdX = np.zeros((4,6))
+            dHdX[:4,:4] = np.diag(1 / (c.rho * c.A))
+            return dHdX
+
+        X_hat = X0_hat
+        P_hat = P0_hat
+        R = np.diag(np.full((4,),self.sig_v**2))
+        
+        X_est = np.zeros((N,6))
+        X_est[0,:] = X_hat
+        for k in tqdm(range(N-1)):
+            t = tt[k]
+            t_next = tt[k+1]
+            Y = yy[k]
+            # X = np.concatenate((self.height_to_mass(Y), dd[k]))
+            u = uu[k]
+            sol_mean = sp.integrate.solve_ivp(
+                fun=fun_mean, t_span=(t, t_next), y0=X_hat, t_eval=[t_next], args=(u,),
+                rtol=1e-6, atol=1e-8
+            )
+            X_tilde = sol_mean.y.flatten()
+            
+            A,_,_,_ = self.get_jacobians(t,X_hat)
+            F,Q = precompute_var(X_hat)
+            sol_var = sp.integrate.solve_ivp(
+                fun=fun_var, t_span=(t, t_next), y0=P_hat.reshape(-1), t_eval=[t_next],
+                # rtol=1e-6, atol=1e-8
+            )
+            P_tilde = sol_var.y.reshape((6,6))
+            H = get_dHdX(t,X_hat)
+
+            # Kalman gain:
+            K = sp.linalg.solve((H @ P_tilde @ H.T + R).T, (P_tilde @ H.T).T).T
+            # K = P_tilde @ H.T @ np.linalg.inv(H @ P_tilde @ H.T + R)
+            X_hat = X_tilde + K @ (Y - self.mass_to_height(X_tilde[:4]))
+            P_hat = (np.eye(6) - K @ H) @ P_tilde
+
+            X_est[k+1,:] = X_hat
+        
+        h_est = self.mass_to_height(X_est[:,:4])
+        fig,ax = plt.subplots(2,1, figsize=(7,7))
+        for i in range(2):
+            ax[i].plot(tt, yy[:,i], label=f'$y_{i+1}$', linestyle='-', marker='.', alpha=0.7)
+            ax[i].plot(tt, hh[:,i], label=f'$h_{i+1}$', linestyle='-', alpha=0.7)
+            ax[i].plot(tt, h_est[:,i], linestyle='-', label='EKF estimate')
+            ax[i].legend()
+            ax[i].grid(True)
+        
+        if filename:
+            plt.savefig(filename)
+        plt.show()
+
+        return X_est

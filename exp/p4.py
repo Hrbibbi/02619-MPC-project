@@ -54,7 +54,7 @@ noise_levels = [
 for i, (f1, f2, name) in enumerate(noise_levels):
     sig_OU = f1 * np.array([sig_OU_base, sig_OU_base])
     sig_v = f2 * sig_v_base
-    stoch_piece = SDE(p.dt, p.zbar, p.ubar, p.sig_v, p.mu_OU, sig_OU, p.coef_OU)
+    stoch_piece = SDE(p.dt, p.zbar, p.ubar, p.sig_v, p.mu_log_OU, sig_OU, p.coef_OU)
     plot_title = 'Step response -- stochastic piecewise model -- ' + name
     stoch_piece.step_response(
         p.h0, p.ubar, p.mu_d, tf, plot_title=plot_title,

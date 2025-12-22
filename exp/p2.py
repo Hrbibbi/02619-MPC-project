@@ -6,7 +6,7 @@ import src.parameters as p
 
 determ = Deterministic(p.dt, p.zbar, p.ubar_segments, p.d_determ)
 stoch_piece = StochasticPiecewise(p.dt, p.zbar, p.ubar_segments, p.sig_v, p.mu_d, p.sig_d, p.t_d)
-stoch_brown = SDE(p.dt, p.zbar, p.ubar_segments, p.sig_v, p.mu_OU, p.sig_OU, p.coef_OU)
+stoch_brown = SDE(p.dt, p.zbar, p.ubar_segments, p.sig_v, p.mu_log_OU1, p.sig_OU, p.coef_OU)
 
 determ.simulate(p.t0, p.tf, p.h0, ctrl_type="")
 stoch_piece.simulate(p.t0, p.tf, p.h0, ctrl_type="")

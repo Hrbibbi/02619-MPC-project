@@ -2,11 +2,12 @@ import numpy as np
 import src.constants as c
 
 n = 4
-h0 = np.zeros((4,))
+# h0 = np.zeros((4,))
+h0 = np.full((4,), 5)
 
 dt = 10.0
 t0 = 0.0
-tf = 20.0 * 60.0
+tf = 40.0 * 60.0
 nt = int((tf - t0)/dt) + 1
 
 # Controller parameters
@@ -29,14 +30,19 @@ ubar_segments = [
 ### Disturbance and measurements
 d_determ = np.full((2,), 100.0)
 
-sig_v = 1.0
+sig_v = 1.5
 
 mu_d = d_determ
 sig_d = np.array([10.0, 10.0])
 t_d = 100
 
 ### SDE disturbance params
-sig_OU = np.full((2,), 0.05)
+# Coefficients are for Y = log F
+sig_OU = 1/5*np.full((2,), 0.05) # 0.01 to 0.05 reasonable
 coef_OU = np.full((2,), 1/(5*dt))
-mu_log_OU = np.full((2,), 100.0) # desired mean in log domain
-mu_OU = np.log(mu_log_OU) - sig_OU**2 / (4*coef_OU)
+# mu_log_OU = np.full((2,), 100.0) # desired mean in log domain
+mu_log_OU1 = np.full((2,), 100.0)
+mu_log_OU = [
+    (0.0,  [100.0, 100.0]),
+    (1000.0, [30.0,  30.0]),
+]
