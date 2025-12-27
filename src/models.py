@@ -33,15 +33,21 @@ class FourTank:
 
         self.rng = np.random.default_rng(seed)
 
+    def get_zbar(self, t):
+        if isinstance(self.zbar, np.ndarray):
+            return self.zbar
+        else:
+            raise ValueError # implement something similar to ubar
+    
     @staticmethod
     def mass_to_height(m):
-        # Convert mass to height
+        """Convert mass to height. For broadcasting to work, m must be N x 4"""
         h = m / (c.rho * c.A)
         return h
     
     @staticmethod
     def height_to_mass(h):
-        # Convert height to mass
+        """Convert height to mass.  For broadcasting to work, h must be N x 4"""
         m = c.rho * c.A * h
         return m
     
@@ -1130,8 +1136,8 @@ class SDE(FourTank):
             X_est[k+1,:] = X_hat
         
         h_est = self.mass_to_height(X_est[:,:4])
-        fig,ax = plt.subplots(2,1, figsize=(7,7))
-        for i in range(2):
+        fig,ax = plt.subplots(4,1, figsize=(10,10))
+        for i in range(4):
             ax[i].plot(tt, yy[:,i], label=f'$y_{i+1}$', linestyle='-', marker='.', alpha=0.7)
             ax[i].plot(tt, hh[:,i], label=f'$h_{i+1}$', linestyle='-', alpha=0.7)
             ax[i].plot(tt, h_est[:,i], linestyle='-', label='EKF estimate')
@@ -1143,3 +1149,633 @@ class SDE(FourTank):
         plt.show()
 
         return X_est
+    
+    def bound_constrained_NMPC(self, t0, tf, h0, Nh, r, Wz, Wu, Wdu, tol=1e-4, maxiter=500, filename=None):
+        """
+        Results depend highly on tol and maxiter!
+        Plotting assumes the weight matrices can be written as $c\cdot I$.
+        
+        r: reference track, given as piecewise function [(t1,[r11,r12], (t2,[r21,r22])), ...]
+        Nh: time horizon T = Nh*dt, dt is sampling time, e.g. time between measurements
+
+        Notation:
+          X: states [m1,m2,m3,m4,F_3 or d_1, F_4 or d_2]
+          Y: height [h1,h2,h3,h4] obtained from self.mass_to_height([m1,m2,m3,m4])
+          Z: [h1,h2]
+          EKF: extended Kalman filter
+        """
+        def construct_r_fun(r):
+            """Build a time-callable function to retrieve the reference track point"""
+            times, values = zip(*r)
+            times = np.asarray(times)
+            values = np.asarray(values)
+            
+            def r_at(t):
+                idx = np.searchsorted(times, t, side="right")
+                idx = np.clip(idx, 0, len(values) - 1)
+                return values[idx]
+            return r_at
+            
+        r_fun = construct_r_fun(r)
+        dt = float(self.dt)
+        T = Nh*dt
+        umin = np.asarray(p.umin, float).reshape((2,))
+        umax = np.asarray(p.umax, float).reshape((2,))
+        N_steps = int(np.ceil((tf - t0) / dt))
+
+        m0 = self.height_to_mass(h0)
+        X0_hat = np.concatenate((m0,self.get_mu_OU_original(self.get_mu_OU(t0))))
+        P0_hat = np.eye(6)
+
+        X_hat = X0_hat
+        P_hat = P0_hat
+        R = np.diag(np.full((4,),self.sig_v**2))
+        
+        def unpack_var(v):
+            x = v[:(4*Nh)].reshape(Nh, 4)
+            u = v[(4*Nh):].reshape(Nh, 2)
+            return x, u
+        def pack_var(x, u):
+            return np.concatenate([x.ravel(), u.ravel()])
+        
+        def horizon_con_fun(X0,v,t):
+            out = np.zeros((Nh,4))
+            x,u = unpack_var(v)
+            x0 = X0[:4]
+            d = X0[4:]
+            
+            f = self.get_rhs(t,x0,u[0],d)
+            out[0] = x[0] - x0 - T/Nh * f
+            for i in range(Nh-1):
+                f = self.get_rhs(t,x[i],u[i+1],d)
+                out[i+1] = x[i+1] - x[i] - T/Nh * f
+            return out.ravel()
+            
+        def horizon_obj_fun(v,r,u0):
+            x,u = unpack_var(v)
+            h = self.mass_to_height(x)
+            z = h[:,:2]
+            term1 = np.sum((Wz @ (z-r).T)**2)
+            term2 = np.sum((Wu @ u.T)**2)
+            du = np.vstack((u[0,:]-u0, np.diff(u,axis=0)))
+            term3 = np.sum((Wdu @ du.T)**2)
+            return term1 + term2 + term3
+        
+        def optimize_horizon(x0, u0, t):
+            """
+            In the optimization, the variables are (as required by scipy) the 1D vector [x.ravel, u.ravel()]
+            """
+            lb = pack_var(
+                np.full((Nh,4), 0),
+                np.tile(p.umin, (Nh,1))
+            )
+            ub = pack_var(
+                np.full((Nh,4), np.inf),
+                np.tile(p.umax, (Nh,1))
+            )
+            bound_con = sp.optimize.Bounds(lb=lb, ub=ub)
+            
+            horizon_con = sp.optimize.NonlinearConstraint(lambda v: horizon_con_fun(x0,v,t), 0, 0)
+            v0 = pack_var(
+                x=np.tile(x0[:4], (Nh,1)),
+                u=np.tile(u0, (Nh,1))
+            )
+            future_times = np.linspace(t, t+T, Nh+1)[1:]
+            r = r_fun(future_times)
+            res = sp.optimize.minimize(
+                fun=lambda v: horizon_obj_fun(v,r,u0),
+                x0=v0,
+                bounds=bound_con,
+                constraints=horizon_con,
+                method='SLSQP',
+                tol=tol,
+                options={'maxiter': maxiter}
+            )
+            if not res.success:
+                raise ValueError(res.message)
+            
+            x,u = unpack_var(res.x)
+            return u[0]
+        
+        def simulate_one_step(t, m_true, u):
+            d_true = self.get_disturbance(t)
+            m_next = self.solve_step(t, m_true, u, d_true, dt=dt)
+            v_next = self.get_measurement_noise(t + dt)
+            y_next = np.clip(self.mass_to_height(m_next) + v_next, 0, None)
+            return m_next, y_next
+        
+        def EKF_predict_one_step(t, X_hat, P_hat, u):
+            def precompute_var(X):
+                """Precomputed matrices for fun_var: dP/dt = FP(t) + P(t)F^T + Q, Q=GG^T"""
+                G = np.zeros((6,2))
+                G[4,0] = X[4]*self.sig_OU[0]
+                G[5,1] = X[5]*self.sig_OU[1]
+                F = A
+                Q = G @ G.T
+                return F,Q
+
+            def fun_mean(t, X, u):
+                f = self.get_drift(t,X,u)
+                return f
+
+            def fun_var(t, P):
+                """P has to be a 1D array for solve_ivp, so reshaping is done inside fun. G and F are assumed constant at the initival values."""
+                # dV/dF = \sigma^2/2 - a \ln(F) - a + a\bar{Y}
+                P = P.reshape((6,6))
+                dPdt = F @ P + P @ F.T + Q
+                return dPdt.reshape(-1)
+            
+            t_next = t + dt
+            sol_mean = sp.integrate.solve_ivp(
+                fun=fun_mean, t_span=(t, t_next), y0=X_hat, t_eval=[t_next], args=(u,),
+                rtol=1e-6, atol=1e-8
+            )
+            X_tilde = sol_mean.y.flatten()
+            A,_,_,_ = self.get_jacobians(t,X_hat)
+            F,Q = precompute_var(X_hat)
+            sol_var = sp.integrate.solve_ivp(
+                fun=fun_var, t_span=(t, t_next), y0=P_hat.reshape(-1), t_eval=[t_next],
+                # rtol=1e-6, atol=1e-8
+            )
+            P_tilde = sol_var.y.reshape((6,6))
+            return X_tilde, P_tilde
+        
+        def EKF_measurement_update(Y, X_tilde, P_tilde, X_hat):
+            def get_dHdX(t, X):
+                dHdX = np.zeros((4,6))
+                dHdX[:4,:4] = np.diag(1 / (c.rho * c.A))
+                return dHdX
+            
+            H = get_dHdX(t,X_hat)
+            K = sp.linalg.solve((H @ P_tilde @ H.T + R).T, (P_tilde @ H.T).T).T
+            X_hat = X_tilde + K @ (Y - self.mass_to_height(X_tilde[:4]))
+            P_hat = (np.eye(6) - K @ H) @ P_tilde
+            return X_hat, P_hat
+        
+        t = 0
+        u_init = (p.umin + p.umax) / 2
+        u = np.zeros((N_steps,2))
+        y = np.zeros((N_steps+1,4))
+        m = np.zeros((N_steps+1,4))
+        m[0] = m0
+        X_est = np.zeros((N_steps+1,6))
+        X_est[0] = X0_hat
+        for i in range(N_steps):
+            # compute the matrix $f(\hat{X}_i, U_i)$. \hat{X}_i is fixed, so this is a function of U
+            # where \hat{X} = [m_1,m_2,m_3,m_4,F_3,F_4] from the EKF estimate.
+            
+            # now do the horizon optimization problem over the next N_horizon steps.
+            # that is, determine u_0,...,u_{N_h-1} minimizing
+            # \sum_{j=0}^N ||z_j-r_j||^2_{W_z} + ||u_j||^2_{W_u} + ||\delta u_j||^2_{W_{\delta u}}
+            # s.t. x_0 = \hat{X}_i    --- from EKF
+            #      x_{j+1} = x_j + T/N_h f(x_j, u_i), j=0,...,N_h-1
+            #      u_min[i] <= u_j[i] <= u_max[i], i=1,2
+            u[i] = optimize_horizon(X_hat, u_init if i == 0 else u[i-1], t)
+
+            # simulate the true process for the time dt using the optimized u_0
+            # this gives the measurement Y_i, which is used in the EKF to estimate \hat{X}_i
+            m[i+1], y[i+1] = simulate_one_step(t, m[i], u[i])
+
+
+            # EKF predict from t to t+dt using applied control
+            X_tilde, P_tilde = EKF_predict_one_step(t, X_hat, P_hat, u[i])
+            # EKF update at t+dt with new measurement
+            X_hat, P_hat = EKF_measurement_update(y[i+1], X_tilde, P_tilde, X_hat)
+            
+            X_est[i+1] = X_hat
+            t += dt
+            
+        tt = np.arange(t0, tf+dt, dt)
+        hh = self.mass_to_height(m)
+        h_est = self.mass_to_height(X_est[:,:4])
+        rr = r_fun(tt)
+        
+        fig,ax = plt.subplots(6,1,figsize=(10,13),constrained_layout=True)
+        plt.suptitle(f'Bound-constrained NMPC with $N={Nh}$, $T={T}$, $W_z={Wz[0,0]}I$, $W_u={Wu[0,0]}I$, $W_{{\Delta u}}={Wdu[0,0]}I$')
+        ax_idx_u = 4
+        for i in range(4):
+            if i in [0,1]:
+                ax[i].step(tt, rr[:,i], where='post', label=f'$r_{i+1}$', color='red', linestyle='--')
+            ax[i].plot(tt, y[:,i], label=f'$y_{i+1}$', linestyle='-', marker='.', alpha=0.7)
+            ax[i].plot(tt, hh[:,i], label=f'$h_{i+1}$', linestyle='-', alpha=0.7)
+            ax[i].plot(tt, h_est[:,i], linestyle='-', label='EKF estimate')
+            ax[i].grid(True)
+            ax[i].legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+            # ax[i].set_xlabel('$t$')
+            
+            # ax[ax_idx_u+i].axhline(umin[i], linestyle="--", color='red')
+            # ax[ax_idx_u+i].axhline(umax[i], linestyle="--", color='red')
+            if i in [0,1]:
+                ax[ax_idx_u+i].plot([t0, tf], [umin[i], umin[i]], linestyle="--", color="red", label=f'Bounds on $u_{i+1}$')
+                ax[ax_idx_u+i].plot([t0, tf], [umax[i], umax[i]], linestyle="--", color="red")
+                ax[ax_idx_u+i].step(tt, np.r_[u[:,i],u[-1,i]], where='post', label=f'$u_{i+1}$')
+                ax[ax_idx_u+i].grid(True)
+                ax[ax_idx_u+i].legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+                if i == 1:
+                    ax[ax_idx_u+i].set_xlabel('$t$')
+        
+        if filename:
+            plt.savefig(filename)
+        plt.show()
+    
+    def IGNORE_bound_constrained_NMPC(self, t0, tf, h0, Nh, r, Wz, Wu, Wdu):
+        """
+        r: reference track, given as piecewise function [(t1,[r11,r12], (t2,[r21,r22])), ...]
+        Nh: time horizon T = Nh*dt, dt is sampling time, e.g. time between measurements
+
+        Notation:
+          X: states [m1,m2,m3,m4,F_3 or d_1, F_4 or d_2]
+          Y: height [h1,h2,h3,h4] obtained from self.mass_to_height([m1,m2,m3,m4])
+          Z: [h1,h2]
+          EKF: extended Kalman filter
+        """
+        dt = float(self.dt)
+        T = Nh*dt
+        umin = np.asarray(p.umin, float).reshape((2,))
+        umax = np.asarray(p.umax, float).reshape((2,))
+        N_steps = int(np.ceil((tf - t0) / dt))
+
+        m0 = self.height_to_mass(h0)
+        X0_hat = np.concatenate((m0,self.get_mu_OU_original(self.get_mu_OU(t0))))
+        P0_hat = np.eye(6)
+
+        X_hat = X0_hat
+        P_hat = P0_hat
+        R = np.diag(np.full((4,),self.sig_v**2))
+
+        # -----------------------------
+        # Helper functions (each time step)
+        # -----------------------------
+        def ref_at_time(t):
+            """
+            Piecewise-constant reference selector from:
+              r = [(t1,[r11,r12]), (t2,[r21,r22]), ...]
+            Convention:
+              - for t < first time -> first ref
+              - for t in [t_k, t_{k+1}) -> ref_k
+              - for t >= last time -> last ref
+            """
+            if r is None or len(r) == 0:
+                return np.asarray(self.zbar, float).reshape((2,))
+            times = np.array([float(tk) for (tk, _rv) in r], dtype=float)
+            vals = np.vstack([np.asarray(rv, float).reshape((2,)) for (_tk, rv) in r])
+            idx = np.searchsorted(times, t, side="right") - 1
+            idx = int(np.clip(idx, 0, len(times) - 1))
+            return vals[idx]
+        
+        def ref_over_horizon(t_i):
+            """
+            Return r_0,...,r_{Nh} sampled at t_i + j*dt.
+            Shape: (2, Nh+1)
+            """
+            Rmat = np.zeros((2, Nh + 1), dtype=float)
+            for j in range(Nh + 1):
+                Rmat[:, j] = ref_at_time(t_i + j * dt)
+            return Rmat
+        
+        def ekf_update_at_time(Y_meas, X_pred, P_pred):
+            """
+            EKF measurement update at the sample time.
+            Measurement model: h = m/(rho*A), no direct dependence on (F3,F4).
+            """
+            # H = dh/dX
+            H = np.zeros((4, 6), dtype=float)
+            H[:4, :4] = np.diag(1.0 / (c.rho * c.A))
+
+            h_pred = self.mass_to_height(X_pred[:4])
+            S = H @ P_pred @ H.T + R
+            K = P_pred @ H.T @ np.linalg.inv(S)
+            X_upd = X_pred + K @ (Y_meas - h_pred)
+            P_upd = (np.eye(6) - K @ H) @ P_pred
+            P_upd = 0.5 * (P_upd + P_upd.T)
+            return X_upd, P_upd
+
+        def ekf_predict_one_step(t_i, X_i, P_i, U_i):
+            """
+            EKF time update from t_i to t_{i+1}=t_i+dt using Euler on mean and covariance.
+            Uses your SDE drift and Jacobians.
+            """
+            # mean Euler
+            f = self.get_drift(t_i, X_i, U_i)
+            X_next = X_i + f * dt
+
+            # linearize for covariance
+            A, _, _, _D = self.get_jacobians(t_i, X_i)
+
+            # diffusion matrix G for OU part (6x2)
+            G = np.zeros((6, 2), dtype=float)
+            G[4, 0] = X_i[4] * self.sig_OU[0]
+            G[5, 1] = X_i[5] * self.sig_OU[1]
+            Qc = G @ G.T
+
+            P_next = P_i + (A @ P_i + P_i @ A.T + Qc) * dt
+            P_next = 0.5 * (P_next + P_next.T)
+            return X_next, P_next
+        
+        def build_nmpc_solver_once():
+            """
+            Build a CasADi Opti solver for the horizon problem.
+            We optimize only masses m (4 states) and inputs u (2),
+            and treat disturbance d=[F3,F4] as a parameter frozen over the horizon.
+            """
+            opti = ca.Opti()
+
+            # Decision variables
+            X = opti.variable(4, Nh + 1)   # masses
+            U = opti.variable(2, Nh)       # inputs
+
+            # Parameters (set each time step)
+            x0 = opti.parameter(4, 1)      # initial masses from EKF estimate
+            d0 = opti.parameter(2, 1)      # frozen disturbance from EKF estimate
+            u_prev = opti.parameter(2, 1)  # previous applied input
+            Rref = opti.parameter(2, Nh + 1)  # reference over horizon
+
+            # Constraints: initial condition
+            opti.subject_to(X[:, 0] == x0)
+
+            # Weights
+            Wz_dm = ca.DM(np.asarray(Wz, float))
+            Wu_dm = ca.DM(np.asarray(Wu, float))
+            Wdu_dm = ca.DM(np.asarray(Wdu, float))
+
+            # Constants
+            rho = ca.DM(c.rho)
+            A = ca.DM(c.A)
+            gamma = ca.DM(c.gamma)
+            a = ca.DM(c.a)
+            g = ca.DM(c.g)
+
+            def z_from_m(m_sym):
+                return ca.vertcat(
+                    m_sym[0] / (rho * A[0]),
+                    m_sym[1] / (rho * A[1]),
+                )
+
+            def f_mass(m_sym, u_sym, d_sym):
+                # CasADi-safe replica of your get_rhs for masses with frozen d
+                h_sym = ca.vertcat(
+                    m_sym[0] / (rho * A[0]),
+                    m_sym[1] / (rho * A[1]),
+                    m_sym[2] / (rho * A[2]),
+                    m_sym[3] / (rho * A[3]),
+                )
+                h_pos = ca.fmax(h_sym, 0)
+
+                q_in = ca.vertcat(
+                    gamma[0] * u_sym[0],
+                    gamma[1] * u_sym[1],
+                    (1 - gamma[1]) * u_sym[1],
+                    (1 - gamma[0]) * u_sym[0],
+                )
+                q = ca.vertcat(
+                    a[0] * ca.sqrt(2 * g * h_pos[0]),
+                    a[1] * ca.sqrt(2 * g * h_pos[1]),
+                    a[2] * ca.sqrt(2 * g * h_pos[2]),
+                    a[3] * ca.sqrt(2 * g * h_pos[3]),
+                )
+                f_sym = rho * ca.vertcat(
+                    q_in[0] + (q[2] - q[0]),
+                    q_in[1] + (q[3] - q[1]),
+                    q_in[2] + (-q[2] + d_sym[0]),
+                    q_in[3] + (-q[3] + d_sym[1]),
+                )
+                return f_sym
+
+            # Objective
+            J = 0
+            for j in range(Nh):
+                # dynamics (Euler): x_{j+1} = x_j + (T/Nh)*f(...)
+                fj = f_mass(X[:, j], U[:, j], d0)
+                opti.subject_to(X[:, j + 1] == X[:, j] + (T / Nh) * fj)
+
+                # bounds
+                opti.subject_to(U[0, j] >= umin[0])
+                opti.subject_to(U[0, j] <= umax[0])
+                opti.subject_to(U[1, j] >= umin[1])
+                opti.subject_to(U[1, j] <= umax[1])
+
+                # stage cost: ||z_j - r_j||_{Wz}^2 + ||u_j||_{Wu}^2 + ||Δu_j||_{Wdu}^2
+                z_j = z_from_m(X[:, j])
+                e_j = z_j - Rref[:, j]
+                J += ca.mtimes([e_j.T, Wz_dm, e_j])
+
+                u_j = U[:, j]
+                J += ca.mtimes([u_j.T, Wu_dm, u_j])
+
+                du_j = U[:, j] - (u_prev if j == 0 else U[:, j - 1])
+                J += ca.mtimes([du_j.T, Wdu_dm, du_j])
+
+            # terminal tracking
+            z_N = z_from_m(X[:, Nh])
+            e_N = z_N - Rref[:, Nh]
+            J += ca.mtimes([e_N.T, Wz_dm, e_N])
+
+            opti.minimize(J)
+
+            opti.solver("ipopt", {
+                "ipopt.print_level": 0,
+                "print_time": 0,
+                "ipopt.max_iter": 200,
+                "ipopt.tol": 1e-6,
+            })
+
+            return opti, X, U, x0, d0, u_prev, Rref
+
+        def solve_horizon_optimization(opti_pack, X_hat_i, U_prev_i, t_i):
+            """
+            Solve the horizon optimization and return optimal U sequence and first control.
+            """
+            opti, Xv, Uv, x0p, d0p, uprevp, Rrefp = opti_pack
+
+            # x0 = m_hat, d0 = d_hat frozen
+            m_hat = np.asarray(X_hat_i[:4], float).reshape((4, 1))
+            d_hat = np.asarray(X_hat_i[4:], float).reshape((2, 1))
+
+            opti.set_value(x0p, m_hat)
+            opti.set_value(d0p, d_hat)
+            opti.set_value(uprevp, np.asarray(U_prev_i, float).reshape((2, 1)))
+
+            Rmat = ref_over_horizon(t_i)  # (2, Nh+1)
+            opti.set_value(Rrefp, Rmat)
+
+            # warm start (kept on function attributes)
+            if not hasattr(self, "_nmpc_last_U"):
+                self._nmpc_last_U = None
+                self._nmpc_last_X = None
+            if self._nmpc_last_U is not None:
+                opti.set_initial(Uv, self._nmpc_last_U)
+            if self._nmpc_last_X is not None:
+                opti.set_initial(Xv, self._nmpc_last_X)
+
+            # sol = opti.solve()
+            #####
+            try:
+                sol = opti.solve()
+            except RuntimeError as e:
+                print("\n=== IPOPT failed ===")
+                print(e)
+
+                # last iterate of decision variables
+                U_dbg = opti.debug.value(Uv)   # Uv is the Opti variable for U
+                X_dbg = opti.debug.value(Xv)   # Xv is the Opti variable for X
+
+                # parameters currently set (very important!)
+                x0_dbg = opti.debug.value(x0p)
+                d0_dbg = opti.debug.value(d0p)
+                up_dbg = opti.debug.value(uprevp)
+                Rref_dbg = opti.debug.value(Rrefp)
+
+                print("x0 (masses):", x0_dbg.T)
+                print("d0 (disturbance frozen):", d0_dbg.T)
+                print("u_prev:", up_dbg.T)
+                print("Rref[0]:", Rref_dbg[:, 0])
+                print("Rref[-1]:", Rref_dbg[:, -1])
+
+                # Find invalid numbers
+                def report_invalid(name, arr):
+                    arr = np.array(arr, dtype=float)
+                    bad = ~np.isfinite(arr)
+                    if bad.any():
+                        idx = np.argwhere(bad)
+                        print(f"[INVALID] {name}: found {bad.sum()} non-finite entries. First few indices:", idx[:10].tolist())
+                    else:
+                        print(f"[OK] {name}: all finite.")
+
+                report_invalid("U_dbg", U_dbg)
+                report_invalid("X_dbg", X_dbg)
+                report_invalid("x0_dbg", x0_dbg)
+                report_invalid("d0_dbg", d0_dbg)
+                report_invalid("Rref_dbg", Rref_dbg)
+
+                # Useful quick checks for domain issues
+                Xmin = np.min(np.array(X_dbg, float))
+                print("min predicted mass in iterate:", Xmin)
+
+                # If you want, stop immediately so you can inspect
+                raise
+
+            #####
+            U_star = sol.value(Uv)  # (2, Nh)
+            X_star = sol.value(Xv)  # (4, Nh+1)
+
+            self._nmpc_last_U = U_star
+            self._nmpc_last_X = X_star
+
+            u0 = U_star[:, 0].copy()
+            return u0, U_star, X_star, Rmat
+
+        def simulate_true_process_one_step(t_i, m_true_i, U_i):
+            """
+            Simulate the true process for dt to get m_true_{i+1} and measurement Y_{i+1}.
+            """
+            d_true = np.asarray(self.get_disturbance(t_i), float)
+            m_next = self.solve_step(t_i, m_true_i, U_i, d_true, dt)
+
+            # measurement at next sample time: Y = h + v (and clipped to >=0)
+            v_next = self.get_measurement_noise(t_i + dt)
+            Y_next = np.clip(self.mass_to_height(m_next) + v_next, 0, None)
+            return m_next, Y_next, d_true
+        
+        # -----------------------------
+        # Build NMPC solver once
+        # -----------------------------
+        opti_pack = build_nmpc_solver_once()
+
+        # -----------------------------
+        # Initialize true state and first measurement at t0
+        # -----------------------------
+        t = float(t0)
+        m_true = np.asarray(m0, float).copy()
+        Y_meas = np.clip(self.mass_to_height(m_true) + self.get_measurement_noise(t0), 0, None)
+
+        # Do an initial EKF update at t0 so X_hat matches the first measurement
+        X_hat, P_hat = ekf_update_at_time(Y_meas, X_hat, P_hat)
+
+        # previous input for Δu (start from nominal ubar at t0)
+        U_prev = np.asarray(self.get_ubar(t0), float).reshape((2,))
+
+        # -----------------------------
+        # Logging
+        # -----------------------------
+        t_hist = np.zeros(N_steps + 1)
+        h_true_hist = np.zeros((N_steps + 1, 4))
+        h_est_hist = np.zeros((N_steps + 1, 4))
+        z_ref_hist = np.zeros((N_steps + 1, 2))
+        u_hist = np.zeros((N_steps + 1, 2))
+
+        t_hist[0] = t
+        h_true_hist[0] = self.mass_to_height(m_true)
+        h_est_hist[0] = self.mass_to_height(X_hat[:4])
+        z_ref_hist[0] = ref_at_time(t)
+        u_hist[0] = U_prev
+
+        for i in range(N_steps):
+            # compute the matrix $f(\hat{X}_i, U_i)$. \hat{X}_i is fixed, so this is a function of U
+            # where \hat{X} = [m_1,m_2,m_3,m_4,F_3,F_4] from the EKF estimate.
+            
+            # now do the horizon optimization problem over the next N_horizon steps.
+            # that is, determine u_0,...,u_{N_h-1} minimizing
+            # \sum_{j=0}^N ||z_j-r_j||^2_{W_z} + ||u_j||^2_{W_u} + ||\delta u_j||^2_{W_{\delta u}}
+            # s.t. x_0 = \hat{X}_i    --- from EKF
+            #      x_{j+1} = x_j + T/N_h f(x_j, u_i), j=0,...,N_h-1
+            #      u_min[i] <= u_j[i] <= u_max[i], i=1,2
+            U_i, U_star, X_star, Rmat = solve_horizon_optimization(opti_pack, X_hat, U_prev, t)
+
+            # simulate the true process for the time dt using the optimized u_0
+            # this gives the measurement Y_i, which is used in the EKF to estimate \hat{X}_i
+            m_true, Y_meas, d_true = simulate_true_process_one_step(t, m_true, U_i)
+
+
+            # EKF predict from t to t+dt using applied control
+            X_hat, P_hat = ekf_predict_one_step(t, X_hat, P_hat, U_i)
+            # EKF update at t+dt with new measurement
+            X_hat, P_hat = ekf_update_at_time(Y_meas, X_hat, P_hat)
+            # advance time and previous input
+            t = t + dt
+            U_prev = np.asarray(U_i, float).reshape((2,))
+
+            # log
+            t_hist[i + 1] = t
+            h_true_hist[i + 1] = self.mass_to_height(m_true)
+            h_est_hist[i + 1] = self.mass_to_height(X_hat[:4])
+            z_ref_hist[i + 1] = ref_at_time(t)
+            u_hist[i + 1] = U_i
+
+        # -----------------------------
+        # Plot: controlled estimate on top of true + reference track
+        # -----------------------------
+        fig, ax = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+        for k_out in range(2):
+            ax[k_out].plot(t_hist, h_true_hist[:, k_out], linewidth=2, label=f"true $h_{k_out+1}$")
+            ax[k_out].plot(t_hist, h_est_hist[:, k_out], linestyle="--", label=f"EKF $\\hat h_{k_out+1}$")
+            ax[k_out].plot(t_hist, z_ref_hist[:, k_out], linestyle="-.", label="ref")
+            ax[k_out].grid(True)
+            ax[k_out].set_ylabel(f"$h_{k_out+1}$")
+            ax[k_out].legend(loc="best")
+        ax[-1].set_xlabel("time")
+        plt.show()
+
+        fig2, ax2 = plt.subplots(2, 1, figsize=(9, 5), sharex=True)
+        ax2[0].plot(t_hist, u_hist[:, 0], linewidth=2, label="$u_1$")
+        ax2[0].axhline(umin[0], linestyle="--")
+        ax2[0].axhline(umax[0], linestyle="--")
+        ax2[0].grid(True)
+        ax2[0].legend(loc="best")
+        ax2[0].set_ylabel("$u_1$")
+
+        ax2[1].plot(t_hist, u_hist[:, 1], linewidth=2, label="$u_2$")
+        ax2[1].axhline(umin[1], linestyle="--")
+        ax2[1].axhline(umax[1], linestyle="--")
+        ax2[1].grid(True)
+        ax2[1].legend(loc="best")
+        ax2[1].set_ylabel("$u_2$")
+        ax2[1].set_xlabel("time")
+        plt.show()
+
+        return {
+            "t": t_hist,
+            "h_true": h_true_hist,
+            "h_est": h_est_hist,
+            "z_ref": z_ref_hist,
+            "u": u_hist,
+        }

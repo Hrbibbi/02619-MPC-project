@@ -7,7 +7,7 @@ h0 = np.full((4,), 5)
 
 dt = 10.0
 t0 = 0.0
-tf = 40.0 * 60.0
+tf = 70.0 * 60.0
 nt = int((tf - t0)/dt) + 1
 
 # Controller parameters
