@@ -1060,7 +1060,7 @@ class SDE(FourTank):
         Fbar = np.exp(Ybar+self.sig_OU/(4*self.coef_OU))
         return Fbar
 
-    def extended_kalman_NMPC(self, t0, tf, h0, filename=''):
+    def extended_kalman_NMPC(self, t0, tf, h0, R=None, plot=False, filename=''):
         """Continuous-Discrete Extended Kalman Filter"""
         self.simulate(t0, tf, h0, ctrl_type="")
 
@@ -1102,10 +1102,14 @@ class SDE(FourTank):
 
         X_hat = X0_hat
         P_hat = P0_hat
-        R = np.diag(np.full((4,),self.sig_v**2))
+        if R is None:
+            R = np.diag(np.full((4,),self.sig_v**2))
         
         X_est = np.zeros((N,6))
         X_est[0,:] = X_hat
+
+        e = np.zeros((N-1, 4)) # innovation
+        S = np.zeros((N-1, 4, 4)) # covariance of innovation
         for k in tqdm(range(N-1)):
             t = tt[k]
             t_next = tt[k+1]
@@ -1128,27 +1132,126 @@ class SDE(FourTank):
             H = get_dHdX(t,X_hat)
 
             # Kalman gain:
-            K = sp.linalg.solve((H @ P_tilde @ H.T + R).T, (P_tilde @ H.T).T).T
+            S[k] = H @ P_tilde @ H.T + R
+            K = sp.linalg.solve(S[k].T, (P_tilde @ H.T).T).T
             # K = P_tilde @ H.T @ np.linalg.inv(H @ P_tilde @ H.T + R)
-            X_hat = X_tilde + K @ (Y - self.mass_to_height(X_tilde[:4]))
+
+            e[k] = Y - self.mass_to_height(X_tilde[:4])
+            X_hat = X_tilde + K @ e[k]
             P_hat = (np.eye(6) - K @ H) @ P_tilde
 
             X_est[k+1,:] = X_hat
         
-        h_est = self.mass_to_height(X_est[:,:4])
-        fig,ax = plt.subplots(4,1, figsize=(10,10))
-        for i in range(4):
-            ax[i].plot(tt, yy[:,i], label=f'$y_{i+1}$', linestyle='-', marker='.', alpha=0.7)
-            ax[i].plot(tt, hh[:,i], label=f'$h_{i+1}$', linestyle='-', alpha=0.7)
-            ax[i].plot(tt, h_est[:,i], linestyle='-', label='EKF estimate')
-            ax[i].legend()
-            ax[i].grid(True)
-        
-        if filename:
-            plt.savefig(filename)
-        plt.show()
+        if plot:
+            h_est = self.mass_to_height(X_est[:,:4])
+            fig,ax = plt.subplots(4,1, figsize=(10,10))
+            for i in range(4):
+                ax[i].plot(tt, yy[:,i], label=f'$y_{i+1}$', linestyle='-', marker='.', alpha=0.7)
+                ax[i].plot(tt, hh[:,i], label=f'$h_{i+1}$', linestyle='-', alpha=0.7)
+                ax[i].plot(tt, h_est[:,i], linestyle='-', label='EKF estimate')
+                ax[i].legend()
+                ax[i].grid(True)
+            
+            if filename:
+                plt.savefig(filename)
+            plt.show()
 
-        return X_est
+        return X_est, e, S
+    
+    def neg_log_likelihood(self, e, S):
+        """
+        Negative log-likelihood for Gaussian innovations.
+
+        Parameters
+        ----------
+        e : (N-1, ny) array
+            Innovations
+        S : (N-1, ny, ny) array
+            Innovation covariances
+
+        Returns
+        -------
+        V : float
+            Negative log-likelihood (up to additive constant)
+        """
+        V = 0.0
+        for k in range(e.shape[0]):
+            Sk = S[k]
+            ek = e[k]
+
+            # Sk = L L^T
+            L = np.linalg.cholesky(Sk)
+
+            # log det Sk
+            logdet = 2.0 * np.sum(np.log(np.diag(L)))
+
+            # y = L^{-1} e_k
+            y = sp.linalg.solve_triangular(L, ek, lower=True)
+
+            # e_k^T S_k^{-1} e_k = y^T y
+            quad = y @ y
+
+            V += 0.5 * (logdet + quad)
+
+        return V
+
+    def pem_sweep_R_scalar(
+        self,
+        t0, tf, h0,
+        sigma_grid,
+        plot=True, filename=None
+    ):
+        """
+        PEM sweep assuming R = sigma^2 * I.
+
+        Parameters
+        ----------
+        sigma_grid : array-like
+            Candidate values for measurement noise std dev sigma_v
+
+        Returns
+        -------
+        sigma_grid : ndarray
+        V : ndarray
+            Negative log-likelihood values
+        sigma_hat : float
+            MLE estimate of sigma_v
+        """
+        V = np.zeros(len(sigma_grid))
+
+        for i, sigma in enumerate(sigma_grid):
+            R = (sigma**2) * np.eye(4)
+
+            _, e, S = self.extended_kalman_NMPC(
+                t0, tf, h0,
+                R=R,
+                plot=False
+            )
+
+            V[i] = self.neg_log_likelihood(e, S)
+
+        idx = np.argmin(V)
+        sigma_hat = sigma_grid[idx]
+        V_hat = V[idx]
+
+        if plot:
+            plt.figure(figsize=(7, 4))
+            plt.plot(sigma_grid, V, '-')
+            plt.axvline(p.sig_v, linestyle='--', color='k', label=fr'True $\sigma_v = {p.sig_v}$')
+            plt.plot(sigma_hat, V_hat, '.', color='red', markersize=14, label=fr'MLE $\sigma_v^\ast = {sigma_hat:.3f}$')
+            plt.grid(True)
+            plt.xlabel(r'$\sigma_v$ (measurement noise std)')
+            plt.ylabel('negative log-likelihood')
+            plt.title(r'PEM sweep for $R=\sigma_v^2 I$')
+            plt.legend()
+            plt.tight_layout()
+            if filename:
+                plt.savefig(filename)
+            plt.show()
+
+        return sigma_grid, V, sigma_hat
+
+
     
     def bound_constrained_NMPC(self, t0, tf, h0, Nh, r, Wz, Wu, Wdu, tol=1e-4, maxiter=500, filename=None):
         """
@@ -1350,30 +1453,103 @@ class SDE(FourTank):
         h_est = self.mass_to_height(X_est[:,:4])
         rr = r_fun(tt)
         
-        fig,ax = plt.subplots(6,1,figsize=(10,13),constrained_layout=True)
-        plt.suptitle(f'Bound-constrained NMPC with $N={Nh}$, $T={T}$, $W_z={Wz[0,0]}I$, $W_u={Wu[0,0]}I$, $W_{{\Delta u}}={Wdu[0,0]}I$')
-        ax_idx_u = 4
-        for i in range(4):
-            if i in [0,1]:
-                ax[i].step(tt, rr[:,i], where='post', label=f'$r_{i+1}$', color='red', linestyle='--')
-            ax[i].plot(tt, y[:,i], label=f'$y_{i+1}$', linestyle='-', marker='.', alpha=0.7)
-            ax[i].plot(tt, hh[:,i], label=f'$h_{i+1}$', linestyle='-', alpha=0.7)
-            ax[i].plot(tt, h_est[:,i], linestyle='-', label='EKF estimate')
-            ax[i].grid(True)
-            ax[i].legend(loc='upper left', bbox_to_anchor=(1.02, 1))
-            # ax[i].set_xlabel('$t$')
+        # fig,ax = plt.subplots(6,1,figsize=(10,13),constrained_layout=True)
+        # plt.suptitle(f'Bound-constrained NMPC with $N={Nh}$, $T={T}$, $W_z={Wz[0,0]}I$, $W_u={Wu[0,0]}I$, $W_{{\Delta u}}={Wdu[0,0]}I$')
+        # ax_idx_u = 4
+        # for i in range(4):
+        #     if i in [0,1]:
+        #         ax[i].step(tt, rr[:,i], where='post', label=f'$r_{i+1}$', color='red', linestyle='--')
+        #     ax[i].plot(tt, y[:,i], label=f'$y_{i+1}$', linestyle='-', marker='.', alpha=0.7)
+        #     ax[i].plot(tt, hh[:,i], label=f'$h_{i+1}$', linestyle='-', alpha=0.7)
+        #     ax[i].plot(tt, h_est[:,i], linestyle='-', label='EKF estimate')
+        #     ax[i].grid(True)
+        #     ax[i].legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+        #     # ax[i].set_xlabel('$t$')
             
-            # ax[ax_idx_u+i].axhline(umin[i], linestyle="--", color='red')
-            # ax[ax_idx_u+i].axhline(umax[i], linestyle="--", color='red')
-            if i in [0,1]:
-                ax[ax_idx_u+i].plot([t0, tf], [umin[i], umin[i]], linestyle="--", color="red", label=f'Bounds on $u_{i+1}$')
-                ax[ax_idx_u+i].plot([t0, tf], [umax[i], umax[i]], linestyle="--", color="red")
-                ax[ax_idx_u+i].step(tt, np.r_[u[:,i],u[-1,i]], where='post', label=f'$u_{i+1}$')
-                ax[ax_idx_u+i].grid(True)
-                ax[ax_idx_u+i].legend(loc='upper left', bbox_to_anchor=(1.02, 1))
-                if i == 1:
-                    ax[ax_idx_u+i].set_xlabel('$t$')
-        
+        #     # ax[ax_idx_u+i].axhline(umin[i], linestyle="--", color='red')
+        #     # ax[ax_idx_u+i].axhline(umax[i], linestyle="--", color='red')
+        #     if i in [0,1]:
+        #         ax[ax_idx_u+i].plot([t0, tf], [umin[i], umin[i]], linestyle="--", color="red", label=f'Bounds on $u_{i+1}$')
+        #         ax[ax_idx_u+i].plot([t0, tf], [umax[i], umax[i]], linestyle="--", color="red")
+        #         ax[ax_idx_u+i].step(tt, np.r_[u[:,i],u[-1,i]], where='post', label=f'$u_{i+1}$')
+        #         ax[ax_idx_u+i].grid(True)
+        #         ax[ax_idx_u+i].legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+        #         if i == 1:
+        #             ax[ax_idx_u+i].set_xlabel('$t$')
+
+        ###########
+        # --- disturbance history (piecewise) ---
+        # Disturbance history (piecewise)
+        td_hist, d_hist = self.get_disturbance_hist()   # td_hist: (K,), d_hist: (K,2)
+
+        fig, ax = plt.subplots(3, 1, figsize=(10, 11), constrained_layout=True)
+        plt.suptitle(
+            f'Bound-constrained NMPC with $N={Nh}$, $T={T}$, '
+            f'$W_z={Wz[0,0]}I$, $W_u={Wu[0,0]}I$, $W_{{\\Delta u}}={Wdu[0,0]}I$'
+        )
+
+        # Base colors for channel 1 and 2
+        c1, c2 = 'C0', 'C1'
+
+        # Make r a "lighter shade" of the corresponding channel color using alpha
+        # (same hue, more see-through) while keeping h more solid.
+        alpha_r = 0.8
+        alpha_y = 0.45
+
+        # ---------- Subplot 1: outputs (h1,h2) + measurements (y1,y2) + references (r1,r2) ----------
+        ax_y = ax[0]
+
+        # h (solid, strong)
+        ax_y.plot(tt, hh[:, 0], color=c1, linestyle='-', linewidth=2.2, label=r'$h_1$')
+        ax_y.plot(tt, hh[:, 1], color=c2, linestyle='-', linewidth=2.2, label=r'$h_2$')
+
+        # y (dots only, transparent)
+        ax_y.plot(tt, y[:, 0], color=c1, linestyle='None', marker='.', alpha=alpha_y, label=r'$y_1$')
+        ax_y.plot(tt, y[:, 1], color=c2, linestyle='None', marker='.', alpha=alpha_y, label=r'$y_2$')
+
+        # r (dashed, lighter via alpha)
+        ax_y.step(tt, rr[:, 0], where='post', color=c1, linestyle='--', linewidth=2.0, alpha=alpha_r, label=r'$r_1$')
+        ax_y.step(tt, rr[:, 1], where='post', color=c2, linestyle='--', linewidth=2.0, alpha=alpha_r, label=r'$r_2$')
+
+        ax_y.grid(True)
+        ax_y.set_ylabel('outputs')
+        ax_y.legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+
+        # ---------- Subplot 2: inputs u1/u2 with bounds ----------
+        ax_u = ax[1]
+
+        # bounds (one label each to avoid duplicate legend entries)
+        for i in [0, 1]:
+            ax_u.plot([t0, tf], [umin[i], umin[i]], linestyle="--", color="red",
+                    alpha=0.8)
+            ax_u.plot([t0, tf], [umax[i], umax[i]], linestyle="--", color="red",
+                    alpha=0.8)
+
+        # inputs (step)
+        ax_u.step(tt, np.r_[u[:, 0], u[-1, 0]], where='post', color=c1, label=r'$u_1$')
+        ax_u.step(tt, np.r_[u[:, 1], u[-1, 1]], where='post', color=c2, label=r'$u_2$')
+
+        ax_u.grid(True)
+        ax_u.set_ylabel('$u$')
+        ax_u.legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+
+        # ---------- Subplot 3: disturbances d1/d2 ----------
+        ax_d = ax[2]
+
+        ax_d.step(td_hist, d_hist[:, 0], where='post', color=c1, label=r'$d_1$')
+        ax_d.step(td_hist, d_hist[:, 1], where='post', color=c2, label=r'$d_2$')
+
+        ax_d.grid(True)
+        ax_d.set_xlabel('$t$')
+        ax_d.set_ylabel('$d$')
+        ax_d.legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+
+        # Optional: force same x-limits everywhere
+        for a in ax:
+            a.set_xlim(t0, tf)
+
         if filename:
             plt.savefig(filename)
+
         plt.show()
+        ###########

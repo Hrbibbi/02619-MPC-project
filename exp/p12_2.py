@@ -15,4 +15,5 @@ print(ubar_segments)
 #     (1500.0, [400.0, 400.0]),
 # ]
 stoch_brown = SDE(p.dt, p.zbar, ubar_segments, p.sig_v, mu_log_OU, p.sig_OU, p.coef_OU)
-stoch_brown.extended_kalman_NMPC(0,tf,p.h0, filename='figs/p12/cont-disc-EKF.pdf')
+stoch_brown.extended_kalman_NMPC(0,tf,p.h0, plot=True, filename='figs/p12/cont-disc-EKF.pdf')
+None
