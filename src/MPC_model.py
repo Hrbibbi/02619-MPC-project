@@ -6,7 +6,6 @@ import src.parameters as p
 from src.models import FourTank, StochasticBrownian, StochasticPiecewise
 from qpsolvers import Problem, solve_problem
 import casadi as ca
-#FT here should probably be a model like StochasticBrownian or Determinisc??
 class FourTank_MPC:
     def __init__(self, FT: FourTank, m_ss, u_ss,d_ss,R,I_C,O_C,static_kf=False,MPC_type=None,use_kf=True,NL_sim=False):
         #SOU is a vector of soft output constraints vectors
