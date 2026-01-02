@@ -1060,7 +1060,11 @@ class SDE(FourTank):
         Fbar = np.exp(Ybar+self.sig_OU/(4*self.coef_OU))
         return Fbar
 
-    def extended_kalman_NMPC(self, t0, tf, h0, R=None, plot=False, filename=''):
+    def extended_kalman_NMPC(
+            self, t0, tf, h0,
+            R=None, gamma1=None,
+            plot=False, filename=''
+        ):
         """Continuous-Discrete Extended Kalman Filter"""
         self.simulate(t0, tf, h0, ctrl_type="")
 
@@ -1104,6 +1108,10 @@ class SDE(FourTank):
         P_hat = P0_hat
         if R is None:
             R = np.diag(np.full((4,),self.sig_v**2))
+        
+        if gamma1 is not None:
+            orig_gamma1 = c.gamma[0]
+            c.gamma[0] = gamma1
         
         X_est = np.zeros((N,6))
         X_est[0,:] = X_hat
@@ -1155,6 +1163,9 @@ class SDE(FourTank):
             if filename:
                 plt.savefig(filename)
             plt.show()
+        
+        if gamma1 is not None:
+            c.gamma[0] = orig_gamma1
 
         return X_est, e, S
     
@@ -1251,7 +1262,45 @@ class SDE(FourTank):
 
         return sigma_grid, V, sigma_hat
 
+    def pem_sweep_gamma1(
+        self,
+        t0, tf, h0,
+        gamma1_grid,
+        plot=True, filename=None
+    ):
+        """
+        Similar to pem_sweep_R_scalar.
+        """
+        V = np.zeros(len(gamma1_grid))
 
+        for i, gamma1 in enumerate(gamma1_grid):
+            _, e, S = self.extended_kalman_NMPC(
+                t0, tf, h0, gamma1=gamma1,
+                plot=False
+            )
+
+            V[i] = self.neg_log_likelihood(e, S)
+
+        idx = np.argmin(V)
+        gamma1_hat = gamma1_grid[idx]
+        V_hat = V[idx]
+
+        if plot:
+            plt.figure(figsize=(7, 4))
+            plt.plot(gamma1_grid, V, '-')
+            plt.axvline(c.gamma[0], linestyle='--', color='k', label=fr'True $\gamma_1 = {c.gamma[0]}$')
+            plt.plot(gamma1_hat, V_hat, '.', color='red', markersize=14, label=fr'MLE $\gamma_1^\ast = {gamma1_hat:.3f}$')
+            plt.grid(True)
+            plt.xlabel(r'$\gamma_1$')
+            plt.ylabel('negative log-likelihood')
+            plt.title(r'PEM sweep for $\gamma_1$')
+            plt.legend()
+            plt.tight_layout()
+            if filename:
+                plt.savefig(filename)
+            plt.show()
+
+        return gamma1_grid, V, gamma1_hat
     
     def bound_constrained_NMPC(self, t0, tf, h0, Nh, r, Wz, Wu, Wdu, tol=1e-4, maxiter=500, filename=None):
         """
