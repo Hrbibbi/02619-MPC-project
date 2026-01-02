@@ -82,31 +82,26 @@ class FourTank_MPC:
                     self.kf = DynamicKF(self.ds, x0, P0, Q=self.Q, R=R,rng=self.FT.rng)
         else:
             self.kf = None
-                
+        
+        #Steady state
         self.y_ss = np.reshape(self.ds.get_y(self.m_ss,self.u_ss,np.zeros((self.FT.n,1))),(self.FT.n,-1))
         self.z_ss = self.ds.get_z(self.m_ss)
         self.d_ss = np.reshape(d_ss, (1, -1))
-        #np.zeros((1, self.ds.Gdd.shape[1])) 
     
     @staticmethod
     def discretize_process_noise(A, Gw, dt):
         n = A.shape[0]
         M = np.zeros((2*n, 2*n))
         M[:n, :n]     =  -A
-        #M[:n, n:]     =  Gw @ Qc @ Gw.T
         M[:n, n:]     =  Gw @ Gw.T
         M[n:, n:]     = A.T
-        Md = sp.linalg.expm(M * dt)
-        #Ad = Md[:n, :n]
-        #Qx = Ad @ Md[:n, n:]    
+        Md = sp.linalg.expm(M * dt) 
         Phi22 = Md[n:, n:]
         Phi12 = Md[:n, n:]    
         Q = Phi22.T @ Phi12
         return np.round(Q,decimals=7)
     
     def get_measurement_noise(self):
-        #return self.rng.normal(scale=self.R)
-        #return np.reshape(self.rng.multivariate_normal(mean=np.zeros(self.R.shape[0]),cov=self.R),(self.R.shape[0],-1))
         e = self.FT.rng.normal(size=self.R.shape[0])
         v = self.Rr @ e
         v = np.reshape(v, (self.R.shape[0],-1))
@@ -116,24 +111,21 @@ class FourTank_MPC:
         e = self.FT.rng.normal(size=self.Q.shape[0])
         w = self.L @ e
         w = np.reshape(w, (self.Q.shape[0],-1))
-        #w = #np.reshape(self.rng.multivariate_normal(mean=np.zeros(self.Q.shape[0]),cov=self.Q),(self.Q.shape[0],-1))
         w[:4] = 0
         return w
     
     @staticmethod
     def qp_solve(H,g,l,u,A,bl,bu,xinit=None):
-        H = (H + H.T) * 0.5 # Numerical stabilty?
+        H = (H + H.T) * 0.5
         if A is not None:
             G = np.concatenate([A, -A], axis=0)
             h = np.concatenate([bu, -bl]).ravel()
         else:
             G, h = None, None
         if xinit is not None:
-            problem = Problem(P=H, q=g.ravel(), G=G, h=h, A=None, b=None,lb=None if l is None else l.ravel(),
-                                                                        ub=None if u is None else u.ravel(), xinit=xinit)
+            problem = Problem(P=H, q=g.ravel(), G=G, h=h, A=None, b=None,lb=None if l is None else l.ravel(), ub=None if u is None else u.ravel(), xinit=xinit)
         else:
-            problem = Problem(P=H, q=g.ravel(), G=G, h=h, A=None, b=None,lb=None if l is None else l.ravel(),
-                                                                        ub=None if u is None else u.ravel())
+            problem = Problem(P=H, q=g.ravel(), G=G, h=h, A=None, b=None,lb=None if l is None else l.ravel(), ub=None if u is None else u.ravel())
         sol = solve_problem(problem, solver="gurobi", verbose=False)
         x = sol.x                 # primal solution
         info_like = {
@@ -148,12 +140,9 @@ class FourTank_MPC:
     def step_NLmodel(self,t,m):
         self.FT.u = self.u.ravel()
         d = self.FT.get_disturbance(t)
-        #d = self.FT.F_t(d)
         m = self.FT.solve_step(t, m, d, self.dt)
         return m,d
     
-                
-    #When we do computations its always in mass units
     def kf_step(self,y_meas,u,d,w=None,t=None):
         if p.EKF:
             x_pred, P_pred = self.kf.predict(u, d,t,None)
@@ -179,9 +168,7 @@ class FourTank_MPC:
         if self.kf is not None:
             self.kf.x = np.reshape(m0-self.m_ss,(len(m0),-1))
         x_plant_dev = np.reshape(m0-self.m_ss,(len(m0),-1))
-        x_plant = m0
-        #u0 = np.atleast_1d(self.FT.get_ubar(t0)).astype(float)
-            
+        x_plant = m0            
         
         self.u = u0 = np.reshape(self.FT.u,(-1,1))
         u_dev = self.u-self.u_ss
@@ -192,10 +179,7 @@ class FourTank_MPC:
             nx -= 2
         nz = self.ds.Cdz.shape[0]
         md = self.ds.Gdd.shape[1]
-        #For the innovation form model this term is important? I think maybe this term is only applied when we have 
-        #Innovation form since the covariance between S = cov(w,v) > 0
-        #However since we have a disturbance term this what should include both the zeros and the new disturbance term so we just set what to be 
-        #The disturbance
+
         if self.MPC_type == "linear":
             self.controller = LMPC_controller(self.ds, self.Wz, self.Wu, self.Wdu,self.Ws,self.Wt,T,nx,nz)
         elif self.MPC_type == "economic":
@@ -217,62 +201,44 @@ class FourTank_MPC:
         self.hist['c'] = self.c 
         self.hist['t'] = np.empty(self.N + 1, dtype=float)
         self.hist['m'] = np.empty((self.N + 1, nx), dtype=float)
-        self.hist['y'] = np.empty((self.N + 1, nx), dtype=float) # y is h + noise
+        self.hist['y'] = np.empty((self.N + 1, nx), dtype=float) 
         self.hist['u'] = np.empty((self.N + 1, nu), dtype=float)
         self.hist['xhat'] = np.zeros_like(self.hist['m'],dtype=float)
         self.hist['zhat'] = np.zeros((self.N + 1, self.ds.Cdz.shape[0]),dtype=float)
         self.hist['Pdiag'] = np.zeros((self.N + 1, self.ds.Ad.shape[0]),dtype=float)
         self.hist['d'] = np.empty((self.N + 1,2),dtype=float)
         d_NL = self.FT.get_disturbance(0) if self.SDE else None
-        #self.hist['d'][0] = d_NL if self.SDE else d_hist[0]
-        #if self.SDE and self.NL_sim:
-        #    self.hist['d'][0] = d_NL
-        #else:
         self.hist['d'][0] = m[4:].ravel() if self.SDE else d_hist[0]
-            
         self.hist['t'][0] = t
         self.hist['m'][0] = m[:4].ravel()
         self.hist['u'][0] = u0.ravel()
         self.hist['zbar'][0] = np.atleast_1d(self.FT.get_zbar(t))[:2]
-        #if self.log_NL:
         m_nl = m0[:4, 0].copy() 
-        self.hist['m_nl'] = np.empty((self.N + 1, nx), dtype=float)    # nonlinear masses
+        self.hist['m_nl'] = np.empty((self.N + 1, nx), dtype=float)    
         self.hist['h_nl'] = np.empty((self.N + 1, nx), dtype=float)
         self.hist['y_nl'] = np.empty((self.N + 1, nx), dtype=float)
         self.hist['m_nl'][0] = m_nl.ravel()
         self.hist['h_nl'][0] = FourTank.mass_to_height(m_nl).ravel()
         
-        
-            
-        #Construct matrices for controller
         self.k = 0
         v = None
 
         while (self.k < self.N) and (t < tf):
             dt = min(self.dt, tf - t)
             
-            #Noises
             if T+self.k > self.N:
                 T = self.N-self.k
             
-            #if self.SDE and self.NL_sim:
-            #    d = d_NL
-            #else:
             d = d_hist[self.k]
             d_dev = np.reshape(d-self.d_ss,(self.FT.n-2,-1))
-            
-            
-            #Maybe we use np.vstack here instead of concatenate
+
+            #Create stacked vectors for the optimization problem. Also convert to deviation vars
             zbar_stack = np.reshape(np.concatenate([self.FT.get_zbar(t+(i+1)*self.dt) for i in range(T)],axis=0), (-1,2))
-            #print(zbar_stack)
             Ubark = np.reshape(np.concatenate([self.FT.get_ubar(t+(i+1)*self.dt) for i in range(T)],axis=0),(-1,2))
             self.hist['zbar'][self.k] = np.atleast_1d(zbar_stack[0][:2])
             zbar_stack_dev = np.reshape(zbar_stack-self.z_ss[:,0],(-1,1))
             Ubark_dev = np.reshape(Ubark-self.u_ss[:,0],(-1,1))
-            #Just set what to be disturbance since S=0
             what = d_dev
-            
-
             Umin_dev = np.reshape(self.umin[self.k:self.k+T]-self.u_ss[:,0],(-1,1)) if self.I_C else None
             Umax_dev = np.reshape(self.umax[self.k:self.k+T]-self.u_ss[:,0],(-1,1)) if self.I_C else None
             duMin_dev = np.reshape(self.dumin[self.k:self.k+T],(-1,1)) if self.I_C else None
@@ -280,6 +246,7 @@ class FourTank_MPC:
             Zmin_dev = np.reshape((zbar_stack - self.ocmin)-self.z_ss[:,0],(-1,1)) if self.O_C else None
             Zmax_dev = np.reshape((zbar_stack + self.ocmax)-self.z_ss[:,0],(-1,1)) if self.O_C else None
             
+            #Run the controller
             if self.controller is not None:
                 if self.MPC_type == "linear":
                     u_seq_dev, info = self.controller.control(self.kf.x[:4], what,T, zbar_stack_dev,u_dev,Ubark_dev,Umin_dev,Umax_dev,duMin_dev,duMax_dev,Zmin_dev,Zmax_dev)
@@ -290,11 +257,9 @@ class FourTank_MPC:
                     u_seq_dev, info = self.controller.control(self.kf.x[:4],ck,xik, what,T, zbar_stack_dev,u_dev,Ubark_dev,Umin_dev,Umax_dev,duMin_dev,duMax_dev,Zmin_dev,Zmax_dev)
                     self.u = np.reshape(u_seq_dev[:nu],(-1,1)) + self.u_ss
                 elif self.MPC_type == "nonlinear" or self.MPC_type == "nonlinear-econ":
-                    #zbar_stack = c.rho*c.A[0:1]*zbar_stack
                     zbar_stack = zbar_stack * (c.rho * np.asarray(c.A[:2]))
                     x0_m = (self.kf.x[:4] + self.m_ss[:4])
                     F_traj = np.exp(np.tile(self.d_ss.reshape(2,1), (1, T)))
-                    #F_traj = np.tile(d_NL.reshape(2,1),(1,T))
                     ck = self.c[self.k:self.k+T, :].T
                     xik = self.xi[self.k:self.k+T, :].T
                     self.u, info = self.controller.control(T,x0_m,self.u,zbar_stack.T, F_traj,ck,xik)
@@ -303,35 +268,27 @@ class FourTank_MPC:
                 
             u_dev = self.u-self.u_ss
             
-            #w = self.kf.get_process_noise() if self.SDE else None
+            #Noises
             w_plant = self.get_process_noise() if self.SDE else None
             w_filter = self.get_process_noise() if self.SDE and self.kf is not None else None
             v = self.get_measurement_noise() if self.stoch else None
         
-            #Get measurement noise,noisy measurement and plant disturbance
+            #Step the linear model
             x_plant_dev = self.ds.step(x_plant_dev,u_dev,d_dev,w_plant)
             x_plant = x_plant_dev+np.reshape(self.m_ss,(len(self.m_ss),-1))
-            
             y_l = self.ds.get_y(x_plant,self.u,v)
             self.hist['y'][self.k] = np.clip(y_l[:,0], 0, None)
-            #m = x_plant
-            m_l = x_plant
-            #self.ds.get_y(x_plant_dev,u_dev,v)      
+            m_l = x_plant      
             y_dev_lin = y_l - self.y_ss
-            
-            #if self.log_NL:
-            #    self.FT.k = self.k
-            #    if self.SDE:
-            #        d_phy = m[4:]
-            #    else:
-            #        d_phy = d  
+             
             self.FT.k = self.k
-            #d_phy = m_l[4:]
+            #Step nonlinear model
             m_nl,d_NL = self.step_NLmodel(t,m_nl)
             self.hist['m_nl'][self.k] = m_nl.ravel()
             y_nl = FourTank.mass_to_height(m_nl)[None,:].T + self.get_measurement_noise() if self.stoch else FourTank.mass_to_height(m_nl)
             self.hist['y_nl'][self.k] = np.clip(y_nl,0,None).ravel()
             
+            #Keep whichever model we simulate dynamics from.
             if self.NL_sim:
                 m = m_nl
                 y = y_nl  
@@ -341,11 +298,9 @@ class FourTank_MPC:
                 y = y_l
                 y_dev = y_dev_lin
             
+            #Run state estimation
             if self.kf is not None:
-                #if p.EKF:
                 x_pred, P_pred, x_filt, P_filt, z_hat = self.kf_step(y_dev,u_dev,d_dev,w_filter,t)
-                #else:
-                #x_pred, P_pred, x_filt, P_filt, z_hat = self.kf_step(y_dev,u_dev,d_dev,w_filter)
                 self.kf.x = x_filt
                 self.kf.P = P_filt
                 self.hist['xhat'][self.k] = x_filt[:4].ravel()
@@ -362,9 +317,6 @@ class FourTank_MPC:
             self.hist['t'][self.k] = t
             self.hist['m'][self.k] = m_l[:4].ravel()
             self.hist['u'][self.k] = np.atleast_1d(self.u.ravel()).astype(float)
-            #if self.SDE and self.NL_sim:
-            #    self.hist['d'][self.k] = d_NL
-            #else:
             self.hist['d'][self.k] = m_l[4:].ravel() if self.SDE else d
                 
             if self.controller is not None:
@@ -375,7 +327,6 @@ class FourTank_MPC:
         self.hist['zbar'][-1] = np.atleast_1d(self.FT.get_zbar(self.tf))[:2]
         self.hist['zhat'][-1] = self.hist['zhat'][-2]
         self.hist['td'] = td_hist
-        #if self.log_NL:
         self.hist['m_nl'][-1] = m_nl.ravel()
         self.hist['h_nl'] = FourTank.mass_to_height(self.hist['m_nl'])  
         self.hist['y_nl'][-1] = np.clip(FourTank.mass_to_height(m_nl)[None, :].T + self.get_measurement_noise() if self.stoch else FourTank.mass_to_height(m_nl), 0, None).ravel()
@@ -395,6 +346,9 @@ class Discrete_system():
         self.dt = dt
     @staticmethod
     def get_discrete(A,B,C,G,dt,D=None):
+        """
+        Discretize the system
+        """
         mu = B.shape[1]
         md = G.shape[1]
         py = C.shape[0]
@@ -404,7 +358,6 @@ class Discrete_system():
         Bd = Bd_aug[:, :mu]  
         Gd = Bd_aug[:, mu:mu+md]           
         Dd   = Dd_aug[:, :mu]
-        #Cdz = self.C_d[0:2,:]
         return Ad, Bd, Cd, Gd, Dd
     def step(self,x,u,d,w):
         if w is None:
@@ -446,7 +399,6 @@ class LMPC_controller(MPC_controller):
         self.Wt1 = Wt[0]
         self.Wt2 = Wt[1]
         self.Phix, self.Phiw, self.Gamma = self.get_system_matrices(T_max)
-        #Construct weight matrices for MPC
         self.I_T = np.eye(T_max, dtype=float)
         
     def build_blocks(self,T):
@@ -467,13 +419,9 @@ class LMPC_controller(MPC_controller):
             Hs[i, :, :]    = CzQ @ self.sys.Bd[:self.nx,:nu]  # C * A^i * B
 
             Q = Q @ self.sys.Ad[:self.nx,:self.nx]  # A^i -> A^(i+1)
-
         return Phix, Phiw, Hs
     
     def get_system_matrices(self,T):        
-        #Phix = np.concatenate([self.ds.Cdz@ (npL.matrix_power(self.ds.Ad,i)) for i in range(1,T+1)],axis=0)
-        #hiw = np.concatenate([self.ds.Cdz@(npL.matrix_power(self.ds.Ad,i))@self.ds.Gd for i in range(T)],axis=0)
-        #Hs = [self.ds.Cdz @ npL.matrix_power(self.ds.Ad,i-1) @ self.ds.Bd for i in range(1,T+1)]
         Phix, Phiw, Hs = self.build_blocks(T)
         L = np.eye(T, k=-1, dtype=int)
         Gamma = sum(np.kron(npL.matrix_power(L, k), Hs[k]) for k in range(T))
@@ -538,21 +486,10 @@ class LMPC_controller(MPC_controller):
             bu_z = zmax - bk
             l[nU:nU+nZ,   :] = 0.0   # S
             l[nU+nZ:nX,   :] = 0.0   # T        
-            #l_s = np.zeros_like(zmin)
-            #u_s = np.ones_like(l_s)*np.inf
-            #l_t = np.zeros_like(zmax)
-            #u_t = np.ones_like(l_t)*np.inf
             bl_low = np.full_like(bl_z,-np.inf)
             bl_up = np.full_like(bu_z,np.inf)
             A_low = np.hstack([Gamma,np.eye(nZ),ZS])
             A_up = np.hstack([Gamma, ZS, -np.eye(nZ)])
-            
-            #if l is None:
-            #    l = np.vstack((l_s,l_t))
-            #    u = np.vstack((u_s,u_t))
-            #else:
-            #    l = np.vstack((l,l_s,l_t))
-            #    u = np.vstack((u,u_s,u_t))
                 
             if A is None:
                 A  = np.vstack((A_low,A_up))
@@ -563,9 +500,6 @@ class LMPC_controller(MPC_controller):
                 A = np.vstack((A_u,A_low,A_up))
                 bl = np.vstack((bl,bl_z,bl_low))
                 bu = np.vstack((bu,bl_up,bu_z))
-                #A  = np.vstack((A,  A_z))
-                #bl = np.vstack((bl, bl_z))
-                #bu = np.vstack((bu, bu_z))
             
             
         x, info = FourTank_MPC.qp_solve(H, g, l, u, A, bl, bu, xinit)
@@ -863,7 +797,6 @@ class EMPC_controller(MPC_controller):
         self.c = c
         self.xi = xi
         self.Phix, self.Phiw, self.Gamma = self.get_system_matrices(T_max)
-        #Construct weight matrices for MPC
         self.I_T = np.eye(T_max, dtype=float)
         
     def build_blocks(self,T):
