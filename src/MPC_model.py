@@ -725,7 +725,6 @@ class NMPC_controller(MPC_controller):
                 Ck  = Ctraj[:, k]
                 Xik = Xitraj[:, k]
 
-            # dynamics (multiple shooting constraint)
             x_next = F_step(x0=xk, p=ca.vertcat(uk, Fk))["xf"]
             opti.subject_to(X[:, k+1] == x_next)
 
