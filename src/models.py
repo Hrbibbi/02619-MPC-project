@@ -62,16 +62,21 @@ class FourTank:
         out = m[:2] / (c.rho * c.A[:2])
         return out
     @staticmethod
-    def linearize_fourtank(m_ss,u_ss,F=False):
+    def linearize_fourtank(m_ss,u_ss,F=False,Fbar=None):
         h_ss = FourTank.mass_to_height(m_ss[:4])
         T = (c.A/c.a)*np.sqrt(2*h_ss/c.g)
         
         if F:
             sigma = np.array([p.sig_sdeF3,p.sig_sdeF4])
             a = np.array([p.aF3,p.aF4])
-            Fbar = p.F0
+            if Fbar is None:
+                Fbar = p.F0
+                Ybar = np.array([p.beta3(0),p.beta4(0)])
+            else:
+                Ybar = Fbar
+                Fbar = np.exp(Fbar)
             #p.F0
-            Ybar = np.array([p.beta3(0),p.beta4(0)])
+            #Ybar = np.array([p.beta3(0),p.beta4(0)])
             V = lambda F, Ybar : 0.5*F*sigma**2 - F*a*np.log(F)+F*a*Ybar
             VF3 = lambda F3 : 0.5*sigma[0]**2 - a[0] * np.log(F3)-a[0]+a[0]*Ybar[0]
             VF4 = lambda F4 : 0.5*sigma[1]**2 - a[1] * np.log(F4)-a[1]+a[1]*Ybar[1]
@@ -108,6 +113,7 @@ class FourTank:
             #This needs fixing.
             
             B = np.array([
+                
                 [c.rho*c.gamma[0],             0.0],
                 [0.0,                    c.rho*c.gamma[1]],
                 [0.0,                    c.rho*(1-c.gamma[1])],

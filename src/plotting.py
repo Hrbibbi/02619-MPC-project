@@ -19,11 +19,11 @@ def mass_to_height_zbar(m):
         h = m / (c.rho * c.A[:2])
         return h
 
-def plot_hist(model, title, plot_disturbance=True, filename=None,step=True,dots=True,targets = True, grid=False, grid_axes=None, col=None,legend=True):
+def plot_hist(model, title, plot_disturbance=True, filename=None,step=True,dots=True,targets = True, grid=False, grid_axes=None, col=None,legend=True,NL=False,state_est=False,econ=False):
     hist = model.hist
     #zbar = model.zbar
 
-    nrows = 3 if plot_disturbance else 2
+    nrows = 3 if plot_disturbance or econ else 2
 
     if grid:
         if grid_axes is None or col is None:
@@ -42,10 +42,26 @@ def plot_hist(model, title, plot_disturbance=True, filename=None,step=True,dots=
     ax[0].set_ylabel("Inputs")
 
     if dots:
-        ax[1].plot(hist['t'], hist['y'][:, 0], ".", color="lightskyblue", alpha=0.5, label=r'$y_1$')
-        ax[1].plot(hist['t'], hist['y'][:, 1], ".", color="moccasin", alpha=0.5, label=r'$y_2$')
-        ax[1].plot(hist['t'], hist['h'][:,0], label=r'$h_1$', lw=2)
-        ax[1].plot(hist['t'], hist['h'][:,1], label=r'$h_2$', lw=2)
+        if state_est:
+            ax[1].plot(hist['t'], hist['zhat'][:,0],"-",color="C0", label=r'$\hat{x}_1$', lw=2,alpha=1)
+            ax[1].plot(hist['t'], hist['zhat'][:,1],"-",color="C1", label=r'$\hat{x}_2$', lw=2,alpha=1)
+        else:
+            if NL:
+                ax[1].plot(hist['t'], hist['y_nl'][:, 0], ".", color="lightskyblue", alpha=0.5, label=r'$y_1$')
+                ax[1].plot(hist['t'], hist['y_nl'][:, 1], ".", color="moccasin", alpha=0.5, label=r'$y_2$')
+                ax[1].plot(hist['t'], hist['h_nl'][:,0],color="C0", label=r'$h_1$', lw=2)
+                ax[1].plot(hist['t'], hist['h_nl'][:,1],color="C1", label=r'$h_2$', lw=2)
+            else:
+                ax[1].plot(hist['t'], hist['y'][:, 0], ".", color="lightskyblue", alpha=0.5, label=r'$y_1$')
+                ax[1].plot(hist['t'], hist['y'][:, 1], ".", color="moccasin", alpha=0.5, label=r'$y_2$')
+                ax[1].plot(hist['t'], hist['h'][:,0],color="C0", label=r'$h_1$', lw=2)
+                ax[1].plot(hist['t'], hist['h'][:,1],color="C1", label=r'$h_2$', lw=2)
+        
+        
+        #ax[1].plot(hist['t'], 19.98401978+hist['xhat'][:, 0]/ (c.rho * c.A[0]), "-", color="blue", alpha=0.5, label=r'$xhat_1$')
+        #ax[1].plot(hist['t'], 22.35303769+hist['xhat'][:, 1]/ (c.rho * c.A[1]), "-", color="orange", alpha=0.5, label=r'$xhat_2$')
+        
+        
         ax[1].set_ylabel("Heights")
     else:
         # --- heights row ---
@@ -78,6 +94,10 @@ def plot_hist(model, title, plot_disturbance=True, filename=None,step=True,dots=
             ax[2].plot(hist['td'], hist['d'][:,0], label=r'$d_1$')
             ax[2].plot(hist['td'], hist['d'][:,1], label=r'$d_2$')
         ax[2].set_ylabel("Disturbances")
+    elif econ:
+        ax[2].step(hist['td'],hist['c'][:,0], where='post',label=r'$c_1$')
+        ax[2].step(hist['td'],hist['c'][:,1], where='post',label=r'$c_2$')
+        ax[2].set_ylabel("Pumping Cost")
     
     ax[-1].set_xlabel("time [s]")
     ax[-1].set_xlim(t0, tf)

@@ -32,15 +32,17 @@ R = (sigma_v**2) * np.eye(n)
 m_ss = np.concatenate((m_ss,Fbar))
 h_ss = np.concatenate((h_ss,Fbar))  
 #m_ss = m_ss
-I_C = False
-O_C = False
+I_C = True
+O_C = True
 u_set = np.array([25,25])
 stoch_brown.u = u_set
-MPC = FourTank_MPC(stoch_brown, m_ss, determ.u, d_ss,R,I_C,O_C,static_kf=True,MPC_type="",use_kf=True,NL_sim=True)
-T = 10
-h0 = np.concatenate((p.h0, Fbar))
+p.EKF = True
+MPC = FourTank_MPC(stoch_brown, m_ss, determ.u, d_ss,R,I_C,O_C,static_kf=False,MPC_type="nonlinear",use_kf=True,NL_sim=True)
+T = 5
+#h0 = np.concatenate((p.h0, Fbar))
+h0 = np.concatenate((stoch_brown.mass_to_height(m_ss[:4]), Fbar))
 MPC.simulate(p.t0,p.tf,h0,T)
-#plot_hist(MPC, f"Closed-loop MPC-controller - SDE", filename=f'p9_stochpiece_MPC_test',step=False)
+plot_hist(MPC, f"Closed-loop MPC-controller - SDE", filename=f'p9_stochpiece_MPC_test',step=False,NL=True)
 from src.models import FourTank
 t       = MPC.hist['t']
 m_true  = MPC.hist['m']         
@@ -60,50 +62,18 @@ axes = axes.ravel()
 
 for k in range(n_tanks):
     ax = axes[k]
-    ax.plot(t[:-1], h_true[:-1, k], label="Linear height", linewidth=2)
+    #ax.plot(t[:-1], h_true[:-1, k], label="Linear height", linewidth=2)
     #ax.plot(t, h_nl[:, k],   label="Nonlinear height")
-    ax.plot(t[:-1], h_hat[:-1, k],  '--', lw=2, label="KF estimate")
-    ax.plot(t[:-1], y_meas[:-1, k], 'o', markersize=3, alpha=0.1, label="Measurement")
-
-    ax.set_title(f"Tank {k+1}")
-    ax.set_ylabel("Height [cm]")
-    ax.grid(True)
-
-axes[-1].set_xlabel("Time [s]")
-axes[-2].set_xlabel("Time [s]")
-
-fig.suptitle("State estimation")
-
-# leave room on the right for the legend
-fig.subplots_adjust(right=0.8)
-
-handles, labels = axes[0].get_legend_handles_labels()
-fig.legend(
-    handles, labels,
-    loc="center left",
-    bbox_to_anchor=(0.82, 0.5),
-    frameon=False,
-    prop={'size': 9},
-)
-plt.savefig("./figs/SK.pdf")
-plt.show()
-
-
-
-fig, axes = plt.subplots(2, 2, figsize=(10, 6), sharex=True)
-axes = axes.ravel()
-
-for k in range(n_tanks):
-    ax = axes[k]
-    #ax.plot(t, h_true[:, k], label="Linear height", linewidth=2)
     ax.plot(t[:-1], h_nl[:-1, k],   label="Nonlinear height")
     ax.plot(t[:-1], h_hat[:-1, k],  '--', lw=2, label="KF estimate")
+    #ax.plot(t[:-1], y_meas[:-1, k], 'o', markersize=3, alpha=0.1, label="Measurement")
     ax.plot(t[:-1], y_nl_meas[:-1, k], 'o', markersize=3, alpha=0.1, label="Measurement")
 
     ax.set_title(f"Tank {k+1}")
-    ax.set_ylabel("Height [cm]")
     ax.grid(True)
 
+axes[0].set_ylabel("Height [cm]")
+axes[2].set_ylabel("Height [cm]")
 axes[-1].set_xlabel("Time [s]")
 axes[-2].set_xlabel("Time [s]")
 
@@ -120,42 +90,5 @@ fig.legend(
     frameon=False,
     prop={'size': 9},
 )
-plt.savefig("./figs/KF_nonlin_jump.pdf")
+plt.savefig("./figs/test_EKF.pdf")
 plt.show()
-
-
-
-
-fig, axes = plt.subplots(2, 2, figsize=(10, 6), sharex=True)
-axes = axes.ravel()
-
-for k in range(n_tanks):
-    ax = axes[k]
-    #ax.plot(t, h_true[:, k], label="Linear height", linewidth=2)
-    ax.plot(t[:-1], h_true[:-1, k]-h_hat[:-1,k],   label="Abs. diff. linear")
-    ax.plot(t[:-1], h_nl[:-1, k]-h_hat[:-1, k],   label="Abs. diff. nonlinear")
-
-    ax.set_title(f"Tank {k+1}")
-    ax.set_ylabel("Height [cm]")
-    ax.grid(True)
-
-axes[-1].set_xlabel("Time [s]")
-axes[-2].set_xlabel("Time [s]")
-
-fig.suptitle("State estimation diff.")
-
-# leave room on the right for the legend
-fig.subplots_adjust(right=0.8)
-
-handles, labels = axes[0].get_legend_handles_labels()
-fig.legend(
-    handles, labels,
-    loc="center left",
-    bbox_to_anchor=(0.82, 0.5),
-    frameon=False,
-    prop={'size': 9},
-)
-plt.savefig("./figs/KF_all_difference_jump.pdf")
-plt.show()
-
-
