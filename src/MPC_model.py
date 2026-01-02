@@ -695,7 +695,7 @@ class NMPC_controller(MPC_controller):
         X0    = opti.parameter(nx, 1)
         Uprev = opti.parameter(nu, 1)
         Zref  = opti.parameter(2, N)       # tracking on masses
-        Ftraj = opti.parameter(2, N)       # exogenous F3,F4 over horizon (NOT state)
+        Ftraj = opti.parameter(2, N)       # exogenous F3,F4 over horizon
         Ctraj = opti.parameter(2, N)       # price for each input over the horizon
         Xitraj = opti.parameter(2, N)      # penalty on slack
         
@@ -705,9 +705,9 @@ class NMPC_controller(MPC_controller):
         u_sym = ca.MX.sym("u", nu)
         f_sym = ca.MX.sym("F", 2)
 
-        xdot = self._f_mass_drift(x_sym, u_sym, f_sym)   # (4,1)
+        xdot = self._f_mass_drift(x_sym, u_sym, f_sym)
         dae = {"x": x_sym, "p": ca.vertcat(u_sym, f_sym), "ode": xdot}
-        F_step = ca.integrator("F_step", "rk", dae, {"tf": dt})  # simple RK (fixed step)
+        F_step = ca.integrator("F_step", "rk", dae, {"tf": dt})  # simple RK 
 
         Wz  = ca.DM(self.Wz)
         Wu  = ca.DM(self.Wu)
@@ -753,7 +753,7 @@ class NMPC_controller(MPC_controller):
             else:
                 #Data fit term
                 J += ca.mtimes([ek.T, Wz, ek])
-                # input magnitude penalty (optional; if you track around a steady-state, subtract u_ss here)
+                # input magnitude penalty 
                 J += ca.mtimes([uk.T, Wu, uk])
                 #Penalty on rate of change of u
                 J += ca.mtimes([duk.T, Wdu, duk])
@@ -762,7 +762,7 @@ class NMPC_controller(MPC_controller):
             if self.umin is not None:  opti.subject_to(uk >= self.umin)
             if self.umax is not None:  opti.subject_to(uk <= self.umax)
 
-            # rate bounds (delta-u)
+            # rate bounds
             if self.dumin is not None: opti.subject_to(duk >= self.dumin)
             if self.dumax is not None: opti.subject_to(duk <= self.dumax)
 
