@@ -562,7 +562,7 @@ class NMPC_controller(MPC_controller):
     def __init__(self, sys, T_max, nx, nz, nd, Wz, Wu, Wdu,
                  umin=None, umax=None, dumin=None, dumax=None,econ=False):
         super().__init__(sys, T_max, nx, nz)
-        assert nx == 4, "This NMPC is mass-only: nx must be 4"
+        assert nx == 4, "nx must be 4"
         self.nu = nd
         self.Wz = Wz
         self.Wu = Wu
@@ -577,12 +577,6 @@ class NMPC_controller(MPC_controller):
         self._build_problem()
 
     def _f_mass_drift(self, m, u, Fk):
-        """
-        m: (4,1) masses
-        u: (2,1) inputs
-        Fk: (2,1) exogenous inflow disturbance [F3, F4] at this stage
-        returns mdot (4,1)
-        """
         rho = float(c.rho)
         g   = float(c.g)
 
@@ -849,15 +843,12 @@ class EMPC_controller(MPC_controller):
         I0[:nu,:nu] = np.eye(nu)
         Lambda_s[1:, :-1] += -np.eye(T-1)
         Lambda = np.kron(Lambda_s, I_nu)
-
-        #H_u, g_u, rho = self.construct_MPC_obj(cU)
         
         if zmin is not None:
             nU = T * nu
             nZ = T * nz
             nX = nU + 1 * nZ
             g = np.zeros((nX, 1))
-            #cXI = self.xi * np.ones((nZ, 1))
             g[:nU]   = ck
             g[nU:] = cXI
             H = 1e-9 * np.eye(nX)
@@ -892,15 +883,11 @@ class EMPC_controller(MPC_controller):
 
         
         if Umin is not None and Umax is not None:
-            #l = Umin
-            #u = Umax
             l[:nU, :] = Umin
             u[:nU, :] = Umax
         
         if duMin is not None and duMax is not None:
             A_rate = Lambda
-            #A_rate = np.hstack([Lambda,
-            #                np.zeros((T*nu, 2*nZ))])
             bl_rate = duMin + I0 @ u_prev
             bu_rate = duMax + I0 @ u_prev
             A  = A_rate
@@ -935,10 +922,7 @@ class KalmanFilter:
         self.x = x0.copy() 
         self.P = P0.copy()
         self.Q = Q
-        #self.L=np.linalg.cholesky(Q)
         self.R = R
-        #self.Rr = np.linalg.cholesky(R)
-        #self.S = np.cov(Q,R)
         self.S = None
         self.rng = rng
 
@@ -1003,7 +987,6 @@ class EKF(KalmanFilter):
         
     def predict(self, u_dev,d_dev,t,w=None):
         u_abs = u_dev + self.u_ss
-        #d_abs = d_dev + self.d_ss
         Y_abs = d_dev + self.d_ss          # this is Ybar (log disturbance)
         F_abs = np.exp(Y_abs) 
         m_abs = self.x + self.m_ss

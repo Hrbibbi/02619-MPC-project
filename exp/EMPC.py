@@ -34,6 +34,7 @@ h_ss = np.concatenate((h_ss,Fbar))
 I_C = True
 O_C = True
 
+#Example of linear EMPC
 u_set = np.array([25,25])
 stoch_brown.u = u_set
 MPC = FourTank_MPC(stoch_brown, m_ss, determ.u, d_ss,R,I_C,O_C,static_kf=False,MPC_type="economic",use_kf=True,NL_sim=True)
@@ -41,5 +42,30 @@ T = 5
 #h0 = np.concatenate((p.h0, Fbar))
 h0 = np.concatenate((stoch_brown.mass_to_height(m_ss[:4]), Fbar))
 #h0 = np.concatenate((stoch_brown.mass_to_height(m_ss[:4]), Fbar))
+p.EKF = False
 MPC.simulate(p.t0,p.tf,h0,T)
-plot_hist(MPC, f"Closed-loop EMPC-controller - SDE", filename=f'EMPC_low_xi',step=False,NL=True,state_est=False,plot_disturbance=False,econ=True)
+plot_hist(MPC, f"Closed-loop EMPC-controller - SDE", filename=f'EMPC_test_cost',step=False,NL=True,state_est=False,plot_disturbance=False,econ=True)
+
+#Price of pumped water
+us = MPC.hist['u']
+total_cost = p.cU*us
+print(f"Linear Total cost of solution is {sum(np.sum(total_cost,axis=0))}")
+
+
+
+#Example of non-linear EMPC
+u_set = np.array([25,25])
+stoch_brown.u = u_set
+MPC = FourTank_MPC(stoch_brown, m_ss, determ.u, d_ss,R,I_C,O_C,static_kf=False,MPC_type="nonlinear-econ",use_kf=True,NL_sim=True)
+T = 5
+#h0 = np.concatenate((p.h0, Fbar))
+h0 = np.concatenate((stoch_brown.mass_to_height(m_ss[:4]), Fbar))
+#h0 = np.concatenate((stoch_brown.mass_to_height(m_ss[:4]), Fbar))
+p.EKF = True
+MPC.simulate(p.t0,p.tf,h0,T)
+plot_hist(MPC, f"Closed-loop NEMPC-controller - SDE", filename=f'NEMPC_test_cost',step=False,NL=True,state_est=False,plot_disturbance=False,econ=True)
+
+#Price of pumped water
+us = MPC.hist['u']
+total_cost = p.cU*us
+print(f"Nonlinear Total cost of solution is {sum(np.sum(total_cost,axis=0))}")

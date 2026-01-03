@@ -23,8 +23,6 @@ x0 = np.zeros(4)
 m_ss, h_ss = compute_ss(determ, x0)
 I_C = True
 O_C = False
-#R = (p.sig_v**2) * np.eye(4)
-#For the deterministic model we have no measurement noise and constant disturbance
 n = m_ss.size
 sigma_v = 1e-10
 R = (sigma_v**2) * np.eye(n)

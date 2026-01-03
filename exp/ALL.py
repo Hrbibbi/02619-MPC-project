@@ -30,7 +30,6 @@ m_ss, h_ss = compute_ss(determ, x0)
 n = m_ss.size
 sigma_v = 1e+0/2
 R = (sigma_v**2) * np.eye(n)
-#In the SDE case we have a larger state vector since disturbance
 m_ss = np.concatenate((m_ss,Fbar))
 h_ss = np.concatenate((h_ss,Fbar))  
 #m_ss = m_ss
@@ -39,6 +38,7 @@ O_C = True
 KP = np.diag([9.62131974, 9.53210738])
 KI = np.diag([0.37880018 ,0.62824258])
 KD = np.diag([6.99353109,5.20565595])
+
 
 u_set = np.array([25,25])
 stoch_brown_L.u = u_set
@@ -58,26 +58,16 @@ MPC_NL.simulate(p.t0,p.tf,h0,T)
 
 
 
-# === After simulations have finished ===
-# stoch_brown_PID.simulate(...)
-# MPC_L.simulate(...)
-# MPC_NL.simulate(...)
-
-# Convenience to pick NL / non-NL keys automatically
 def _get_hist_key(hist, base):
     """Return 'base_nl' if present, otherwise 'base'."""
     nl_key = f"{base}_nl"
     return nl_key if nl_key in hist else base
 
-# Grab histories
 hist_pid = stoch_brown_PID.hist
 hist_l   = MPC_L.hist
 hist_nl  = MPC_NL.hist
 
 
-# === Nice 2x2 comparison plot: levels (top), flows (bottom) ===
-
-# Helper to pick y vs y_nl automatically
 def _get_y(hist):
     return hist["y_nl"] if "y_nl" in hist else hist["y"]
 
@@ -94,7 +84,6 @@ u_pid  = hist_pid["u"]
 u_l    = hist_l["u"]
 u_nl   = hist_nl["u"]
 
-# Use reference trajectory from one of the MPC histories (same for all)
 zbar = hist_l.get("zbar", None)
 
 fig, axes = plt.subplots(2, 2, figsize=(10, 6), sharex=True)
@@ -102,16 +91,9 @@ fig, axes = plt.subplots(2, 2, figsize=(10, 6), sharex=True)
 
 colors = {"PID": "C0", "LMPC": "C1", "NMPC": "C2"}
 
-# ----------------------
-# Top-left: Tank 1 level
-# ----------------------
 ax11.plot(t, y_pid[:, 0], label="PID",   color=colors["PID"],  linewidth=2)
 ax11.plot(t, y_l[:, 0],   label="LMPC",  color=colors["LMPC"], linewidth=2)
 ax11.plot(t, y_nl[:, 0],  label="NMPC",  color=colors["NMPC"], linewidth=2)
-#ax11.plot(t, h_pid[:, 0], label="PID",   color=colors["PID"],  linewidth=2)
-#ax11.plot(t, h_l[:, 0],   label="LMPC",  color=colors["LMPC"], linewidth=2)
-#ax11.plot(t, h_nl[:, 0],  label="NMPC",  color=colors["NMPC"], linewidth=2)
-#ax11.plot(T, hist['y_nl'][:, 0], ".", color="lightskyblue", alpha=0.5, label=r'$y_1$')
 
 if zbar is not None:
     ax11.plot(t, zbar[:, 0], "k--", label="reference")
@@ -120,39 +102,25 @@ ax11.set_title("Tank 1 level")
 ax11.set_ylabel("Level [cm]")
 ax11.grid(True, alpha=0.3)
 
-# ----------------------
-# Top-right: Tank 2 level
-# ----------------------
 ax12.plot(t, y_pid[:, 1], label="PID",   color=colors["PID"],  linewidth=2)
 ax12.plot(t, y_l[:, 1],   label="LMPC",  color=colors["LMPC"], linewidth=2)
 ax12.plot(t, y_nl[:, 1],  label="NMPC",  color=colors["NMPC"], linewidth=2)
-#ax12.plot(t, h_pid[:, 1], label="PID",   color=colors["PID"],  linewidth=2)
-#ax12.plot(t, h_l[:, 1],   label="LMPC",  color=colors["LMPC"], linewidth=2)
-#ax12.plot(t, h_nl[:, 1],  label="NMPC",  color=colors["NMPC"], linewidth=2)
 if zbar is not None:
     ax12.plot(t, zbar[:, 1], "k--", label="reference")
-
-
 
 ax12.set_title("Tank 2 level")
 ax12.set_ylabel("Level [cm]")
 ax12.grid(True, alpha=0.3)
 
-# ----------------------
-# Bottom-left: Pump 1 flow u1
-# ----------------------
 ax21.step(t, u_pid[:, 0], where="post", label="PID",   color=colors["PID"],  linewidth=2)
 ax21.step(t, u_l[:, 0],   where="post", label="LMPC",  color=colors["LMPC"], linewidth=2)
 ax21.step(t, u_nl[:, 0],  where="post", label="NMPC",  color=colors["NMPC"], linewidth=2)
 
 ax21.set_title("Pump 1 flow")
-ax21.set_ylabel(r"$u_1$ [cm$^3$/s]")  # adjust units if different
+ax21.set_ylabel(r"$u_1$ [cm$^3$/s]") 
 ax21.set_xlabel("Time [s]")
 ax21.grid(True, alpha=0.3)
 
-# ----------------------
-# Bottom-right: Pump 2 flow u2
-# ----------------------
 ax22.step(t, u_pid[:, 1], where="post", label="PID",   color=colors["PID"],  linewidth=2)
 ax22.step(t, u_l[:, 1],   where="post", label="LMPC",  color=colors["LMPC"], linewidth=2)
 ax22.step(t, u_nl[:, 1],  where="post", label="NMPC",  color=colors["NMPC"], linewidth=2)
@@ -162,9 +130,6 @@ ax22.set_ylabel(r"$u_2$ [cm$^3$/s]")
 ax22.set_xlabel("Time [s]")
 ax22.grid(True, alpha=0.3)
 
-# ----------------------
-# One global legend (top center), no per-axis legend clutter
-# ----------------------
 handles, labels = ax11.get_legend_handles_labels()
 fig.legend(handles, labels,
            loc="upper center", ncol=4,

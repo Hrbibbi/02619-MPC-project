@@ -28,7 +28,6 @@ m_ss, h_ss = compute_ss(determ, x0)
 n = m_ss.size
 sigma_v = 1e+0
 R = (sigma_v**2) * np.eye(n)
-#In the SDE case we have a larger state vector since disturbance
 m_ss = np.concatenate((m_ss,Fbar))
 h_ss = np.concatenate((h_ss,Fbar))  
 #m_ss = m_ss
@@ -39,10 +38,9 @@ stoch_brown.u = u_set
 p.EKF = True
 MPC = FourTank_MPC(stoch_brown, m_ss, determ.u, d_ss,R,I_C,O_C,static_kf=False,MPC_type="nonlinear",use_kf=True,NL_sim=True)
 T = 5
-#h0 = np.concatenate((p.h0, Fbar))
 h0 = np.concatenate((stoch_brown.mass_to_height(m_ss[:4]), Fbar))
 MPC.simulate(p.t0,p.tf,h0,T)
-plot_hist(MPC, f"Closed-loop MPC-controller - SDE", filename=f'p9_stochpiece_MPC_test',step=False,NL=True)
+plot_hist(MPC, f"Closed-loop NMPC-controller - SDE", filename=f'NMPC-test',step=False,NL=True)
 from src.models import FourTank
 t       = MPC.hist['t']
 m_true  = MPC.hist['m']         
@@ -53,7 +51,7 @@ y_nl_meas = MPC.hist['y_nl']
 m_ss    = MPC.m_ss.ravel()       
 m_hat   = xhat + m_ss[:4]           
 h_hat   = FourTank.mass_to_height(m_hat)
-h_nl  = MPC.hist['h_nl']      # true nonlinear heights
+h_nl  = MPC.hist['h_nl']      
 
 n_tanks = 4
 
@@ -62,11 +60,8 @@ axes = axes.ravel()
 
 for k in range(n_tanks):
     ax = axes[k]
-    #ax.plot(t[:-1], h_true[:-1, k], label="Linear height", linewidth=2)
-    #ax.plot(t, h_nl[:, k],   label="Nonlinear height")
     ax.plot(t[:-1], h_nl[:-1, k],   label="Nonlinear height")
     ax.plot(t[:-1], h_hat[:-1, k],  '--', lw=2, label="KF estimate")
-    #ax.plot(t[:-1], y_meas[:-1, k], 'o', markersize=3, alpha=0.1, label="Measurement")
     ax.plot(t[:-1], y_nl_meas[:-1, k], 'o', markersize=3, alpha=0.1, label="Measurement")
 
     ax.set_title(f"Tank {k+1}")
@@ -79,7 +74,6 @@ axes[-2].set_xlabel("Time [s]")
 
 fig.suptitle("State estimation")
 
-# leave room on the right for the legend
 fig.subplots_adjust(right=0.8)
 
 handles, labels = axes[0].get_legend_handles_labels()

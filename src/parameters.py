@@ -21,9 +21,8 @@ ubar = np.array([0.0, 0.0])
 #    (0, [20,15]),
 #    (600.0, [25, 20])
 #]
-#THis is good
 #zbar = (np.array([24,24]),np.array([2,2]),800)
-#zbar = (np.array([30,30]),np.array([5,5]),800)
+zbar = (np.array([30,30]),np.array([5,5]),800)
 #zbar = (np.array([27+20,33+20]),np.array([8,8]),800)
 
 #zbar = (np.array([60,60]),np.array([5,5]),800)
@@ -31,14 +30,13 @@ ubar = np.array([0.0, 0.0])
 
 #Economic
 #zbar = (np.array([19.98+10,22.35+7]),np.array([5,5]),2500)
-zbar = (np.array([60,60]),np.array([5,5]),2500)
+#zbar = (np.array([60,60]),np.array([5,5]),2500)
 
 
 #zbar = (np.array([27,27]),np.array([5,5]),1800)
 
 umin = np.array([0.0, 0.0])
 umax = np.array([500.0, 500.0])
-#Useually i have used 30 here but for the final plots in the end i have used 30. and in economic i have used 50
 du_lim = 50
 dumin = np.array([-du_lim, -du_lim])
 dumax = np.array([+du_lim, +du_lim])
@@ -68,12 +66,12 @@ t_c = 100
 #0
 cU = c.construct_cost_poisson(nt, dt, mu_c, sig_c, t_c, seed=0)
 
-#xi_v = 1000*2  
-xi_v = 100
+xi_v = 1000*2  
+#xi_v = 100
 xi = np.full((nt,2),xi_v)
 
 
-#Extended kalman filter
+#Extended kalman filter set to true if you want it to run instead of normal KF
 EKF = False
 
 
@@ -82,13 +80,19 @@ EKF = False
 #KI = np.zeros((2, 2)); KI[0,0]=0.05; KI[1,1]=0.05
 #KD = np.zeros((2, 2)); KD[0,0]=1.0;  KD[1,1]=1.0
 
-KP = np.zeros((2, 2)); KP[0,0]=1/3; KP[1,1]=1/3
-KI = np.zeros((2, 2)); KI[0,0]=1/3; KI[1,1]=1/3
-KD = np.zeros((2, 2)); KD[0,0]=1/3;  KD[1,1]=1/3
+#KP = np.zeros((2, 2)); KP[0,0]=1/3; KP[1,1]=1/3
+#KI = np.zeros((2, 2)); KI[0,0]=1/3; KI[1,1]=1/3
+#KD = np.zeros((2, 2)); KD[0,0]=1/3;  KD[1,1]=1/3
 
-#KP = np.diag([10,10])
-#KI = np.diag([0.31588595,0.47722896])
-#KD = np.diag([5.40119979,6.5867388])
+#KP = np.diag([9.62131974, 9.53210738])
+#KI = np.diag([0.37880018 ,0.62824258])
+#KD = np.diag([6.99353109,5.20565595])
+
+KP = np.diag([10,10])
+KI = np.diag([0.31588595,0.47722896])
+KD = np.diag([5.40119979,6.5867388])
+
+
 
 ubar_segments = [
     (0, [100.0, 300.0]),
@@ -100,9 +104,6 @@ ubar_segments = [
 
 ### Disturbance and measurements
 d_determ = np.full((2,), 200)
-#d_determ = np.concatenate([np.full(nt//2, 200), np.full(nt - nt//2, 250)])
-#d_determ = np.concatenate()
-#d_determ = np.vstack([d_determ,d_determ])
 
 sig_v = 1.0/2
 
@@ -135,12 +136,10 @@ dwF4 = lambda F4,t: sig_sde
 #Feller condition 2*a*Fbar >= sigma^2 then F_t > 0
 #sig_sde = 0.1*1/2
 #sig_sde = 0.1*1/2
-#This is what is used to produce open loop sims for SDE 
 #sig_sde = 0.1*1/4
 sig_sde = 0.1*0.1
 aF3 = aF4 = 0.1
         
-#THis is what we experiment with on KF and state estimation
 #sig_sde = 0.001
 #aF3 = aF4 = 0.05*0.1
 
